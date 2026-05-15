@@ -11,19 +11,19 @@
       <header class="topbar">
         <div>
           <p class="eyebrow">Friend Schedule</p>
-          <h1>Game Friend Calendar</h1>
+          <h1>Calendar</h1>
         </div>
       </header>
 
       <main class="layout">
         <section class="calendar-section">
           <div class="toolbar">
-            <div class="nav-controls">
+            <div class="toolbar-spacer"></div>
+            <div class="period-nav">
               <button id="prevBtn" class="icon-button" aria-label="前へ">‹</button>
-              <button id="todayBtn" class="button subtle">今日</button>
+              <h2 id="periodTitle">-</h2>
               <button id="nextBtn" class="icon-button" aria-label="次へ">›</button>
             </div>
-            <h2 id="periodTitle">-</h2>
             <div class="view-switch" aria-label="表示切替">
               <button id="monthViewBtn" class="segmented active">月</button>
               <button id="weekViewBtn" class="segmented">週</button>
@@ -43,7 +43,7 @@
             <div id="todayList" class="event-list empty">予定はありません</div>
           </section>
 
-          <section class="panel">
+          <section class="panel search-panel">
             <h2>日付検索</h2>
             <div class="search-row">
               <input id="searchDate" type="date" />
@@ -52,9 +52,8 @@
             <div id="searchResult" class="event-list empty">日付を選んでください</div>
           </section>
 
-          <section class="panel">
+          <section class="panel notification-panel">
             <h2>通知</h2>
-            <p class="muted">アプリを開いている間、予定時刻の少し前にブラウザ通知します。</p>
             <div class="search-row">
               <select id="reminderMinutes">
                 <option value="0">予定時刻</option>
@@ -65,6 +64,7 @@
               </select>
               <button id="notificationBtn" class="button subtle">通知を許可</button>
             </div>
+            <p class="muted">アプリを開いている間<br />予定時刻の少し前にブラウザ通知します。</p>
           </section>
         </aside>
       </main>

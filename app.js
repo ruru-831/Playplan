@@ -1,16 +1,19 @@
 const STORAGE_KEY = "game-friend-calendar-events";
+const HOUR_HEIGHT = 56;
 
 const state = {
   events: [],
   currentDate: new Date(),
+  lastDateKey: toDateKey(new Date()),
   view: "month",
   notifiedKeys: new Set()
 };
 
 const els = {
+  calendarSection: document.querySelector(".calendar-section"),
+  sidePanel: document.querySelector(".side-panel"),
   prevBtn: document.querySelector("#prevBtn"),
   nextBtn: document.querySelector("#nextBtn"),
-  todayBtn: document.querySelector("#todayBtn"),
   monthViewBtn: document.querySelector("#monthViewBtn"),
   weekViewBtn: document.querySelector("#weekViewBtn"),
   periodTitle: document.querySelector("#periodTitle"),
@@ -44,16 +47,18 @@ function init() {
   bindEvents();
   setDefaultDates();
   render();
+  syncSidePanelHeight();
+  window.addEventListener("resize", syncSidePanelHeight);
+  new ResizeObserver(syncSidePanelHeight).observe(els.calendarSection);
+  setInterval(updateCurrentTimeLine, 60000);
+  setInterval(checkDateChange, 60000);
+  setInterval(renderToday, 60000);
   setInterval(checkReminders, 30000);
 }
 
 function bindEvents() {
   els.prevBtn.addEventListener("click", () => movePeriod(-1));
   els.nextBtn.addEventListener("click", () => movePeriod(1));
-  els.todayBtn.addEventListener("click", () => {
-    state.currentDate = new Date();
-    render();
-  });
   els.monthViewBtn.addEventListener("click", () => setView("month"));
   els.weekViewBtn.addEventListener("click", () => setView("week"));
   els.newEventBtn.addEventListener("click", () => openEventDialog(toDateKey(new Date())));
@@ -147,6 +152,29 @@ function render() {
   if (state.view === "week") renderWeek();
   renderToday();
   renderSearch();
+  syncSidePanelHeight();
+}
+
+function checkDateChange() {
+  const currentDateKey = toDateKey(new Date());
+  if (currentDateKey === state.lastDateKey) return;
+
+  state.lastDateKey = currentDateKey;
+  render();
+}
+
+function syncSidePanelHeight() {
+  if (window.matchMedia("(max-width: 980px)").matches) {
+    els.sidePanel.style.height = "";
+    return;
+  }
+
+  const calendarHeight = els.calendarSection.getBoundingClientRect().height;
+  els.sidePanel.style.height = `${calendarHeight}px`;
+  requestAnimationFrame(() => {
+    const nextCalendarHeight = els.calendarSection.getBoundingClientRect().height;
+    els.sidePanel.style.height = `${nextCalendarHeight}px`;
+  });
 }
 
 function renderMonth() {
@@ -180,22 +208,51 @@ function renderWeek() {
   els.periodTitle.textContent = `${formatJapaneseDate(start)} - ${formatJapaneseDate(end)}`;
 
   const wrapper = document.createElement("div");
-  wrapper.className = "week-grid";
-  addWeekHeaders(wrapper);
+  wrapper.className = "week-schedule";
+
+  const corner = document.createElement("div");
+  corner.className = "week-time-corner";
+  wrapper.appendChild(corner);
 
   for (let i = 0; i < 7; i += 1) {
     const date = new Date(start);
     date.setDate(start.getDate() + i);
-    wrapper.appendChild(createDayCell(date, false));
+
+    const header = document.createElement("div");
+    header.className = "week-day-header";
+    if (toDateKey(date) === toDateKey(new Date())) header.classList.add("today");
+    if (date.getDay() === 0) header.classList.add("sunday");
+    if (date.getDay() === 6) header.classList.add("saturday");
+    header.innerHTML = `<span>${weekdays[date.getDay()]}</span><strong>${date.getDate()}</strong>`;
+    wrapper.appendChild(header);
+  }
+
+  const timeRail = document.createElement("div");
+  timeRail.className = "week-time-rail";
+  for (let hour = 0; hour < 24; hour += 1) {
+    const label = document.createElement("div");
+    label.className = "time-label";
+    label.textContent = `${String(hour).padStart(2, "0")}:00`;
+    timeRail.appendChild(label);
+  }
+  wrapper.appendChild(timeRail);
+
+  for (let i = 0; i < 7; i += 1) {
+    const date = new Date(start);
+    date.setDate(start.getDate() + i);
+    wrapper.appendChild(createWeekDayColumn(date));
   }
 
   els.calendarRoot.replaceChildren(wrapper);
+  updateCurrentTimeLine();
 }
 
 function addWeekHeaders(wrapper) {
-  weekdays.forEach((day) => {
+  weekdays.forEach((day, index) => {
     const header = document.createElement("div");
     header.className = "weekday";
+    if (index === 0) header.classList.add("sunday");
+    if (index === 6) header.classList.add("saturday");
     header.textContent = day;
     wrapper.appendChild(header);
   });
@@ -207,6 +264,7 @@ function createDayCell(date, isMuted) {
   cell.className = "day-cell";
   if (isMuted) cell.classList.add("muted-day");
   if (key === toDateKey(new Date())) cell.classList.add("today");
+  cell.addEventListener("click", () => openEventDialog(key));
 
   const head = document.createElement("div");
   head.className = "day-head";
@@ -215,14 +273,7 @@ function createDayCell(date, isMuted) {
   number.className = "date-number";
   number.textContent = String(date.getDate());
 
-  const addBtn = document.createElement("button");
-  addBtn.className = "add-mini";
-  addBtn.type = "button";
-  addBtn.textContent = "+";
-  addBtn.setAttribute("aria-label", `${key}に予定追加`);
-  addBtn.addEventListener("click", () => openEventDialog(key));
-
-  head.append(number, addBtn);
+  head.append(number);
   cell.appendChild(head);
 
   getEventsByDate(key).forEach((item) => {
@@ -230,15 +281,106 @@ function createDayCell(date, isMuted) {
     chip.className = "event-chip";
     chip.type = "button";
     chip.textContent = `${formatTimeRange(item)} ${item.friend_name}`;
-    chip.addEventListener("click", () => openEventDialog(key, item));
+    chip.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openEventDialog(key, item);
+    });
     cell.appendChild(chip);
   });
 
   return cell;
 }
 
+function createWeekDayColumn(date) {
+  const key = toDateKey(date);
+  const column = document.createElement("section");
+  column.className = "week-day-column";
+  column.style.height = `${HOUR_HEIGHT * 24}px`;
+  if (key === toDateKey(new Date())) column.classList.add("today");
+  column.addEventListener("click", (event) => {
+    openEventDialog(key);
+    els.startTime.value = getTimeFromWeekClick(event);
+  });
+
+  getEventsByDate(key).forEach((item) => {
+    const eventButton = document.createElement("button");
+    eventButton.className = "week-event";
+    eventButton.type = "button";
+    eventButton.style.top = `${timeToMinutes(item.start_time) / 60 * HOUR_HEIGHT}px`;
+    eventButton.style.height = `${getEventDurationMinutes(item) / 60 * HOUR_HEIGHT}px`;
+    eventButton.innerHTML = `<strong>${formatTimeRange(item)}</strong><span>${escapeHtml(item.friend_name)}</span>`;
+    eventButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openEventDialog(key, item);
+    });
+    column.appendChild(eventButton);
+  });
+
+  if (key === toDateKey(new Date())) {
+    const line = document.createElement("div");
+    line.className = "current-time-line";
+    column.appendChild(line);
+  }
+
+  return column;
+}
+
+function updateCurrentTimeLine() {
+  const line = document.querySelector(".current-time-line");
+  if (!line) return;
+
+  const now = new Date();
+  const minutes = now.getHours() * 60 + now.getMinutes();
+  line.style.top = `${minutes / 60 * HOUR_HEIGHT}px`;
+}
+
+function timeToMinutes(value) {
+  const normalized = normalizeTime(value);
+  if (!normalized) return 0;
+  const [hours, minutes] = normalized.split(":").map(Number);
+  return hours * 60 + minutes;
+}
+
+function getTimeFromWeekClick(event) {
+  const rect = event.currentTarget.getBoundingClientRect();
+  const y = Math.max(0, Math.min(rect.height, event.clientY - rect.top));
+  const rawMinutes = y / HOUR_HEIGHT * 60;
+  const roundedMinutes = Math.min(23 * 60 + 30, Math.floor(rawMinutes / 30) * 30);
+  return minutesToTime(roundedMinutes);
+}
+
+function minutesToTime(totalMinutes) {
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+function getEventDurationMinutes(event) {
+  const start = timeToMinutes(event.start_time);
+  const end = timeToMinutes(event.end_time);
+  if (end > start) return Math.max(end - start, 30);
+  return 45;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 function renderToday() {
-  renderEventList(els.todayList, getEventsByDate(toDateKey(new Date())));
+  const items = getEventsByDate(toDateKey(new Date())).filter(isUpcomingTodayEvent);
+  renderEventList(els.todayList, items);
+}
+
+function isUpcomingTodayEvent(event) {
+  const now = new Date();
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  const eventMinutes = timeToMinutes(event.end_time || event.start_time);
+  return eventMinutes >= currentMinutes;
 }
 
 function renderSearch() {
