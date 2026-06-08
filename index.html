@@ -33,18 +33,22 @@
 
             <div id="calendarRoot" class="calendar-root" aria-live="polite"></div>
           </section>
-          <p class="calendar-note">※Cookieやサイトデータを削除すると予定が消える場合があります。</p>
+          <p class="calendar-note">※別の端末でも予定を見たい場合は、Googleでログインしてから「この端末の予定を同期する」を押してください。</p>
         </div>
 
         <aside class="side-panel">
           <section class="panel auth-panel">
-            <h2>同期</h2>
-            <p id="authStatus" class="muted">Firebase未設定のため、現在はローカル保存のみです。</p>
+            <div class="panel-heading auth-heading">
+              <h2>同期</h2>
+              <div class="auth-primary-actions">
+                <button id="googleLoginBtn" class="button primary">Googleでログイン</button>
+                <button id="logoutBtn" class="button subtle hidden">ログアウト</button>
+              </div>
+            </div>
             <p id="syncStatus" class="mode-message">この端末の予定は localStorage に保存されます。</p>
+            <p id="authStatus" class="muted">Googleでログインすると、PCとスマホで同じ予定を見られます。</p>
             <div class="auth-actions">
-              <button id="googleLoginBtn" class="button primary">Googleでログイン</button>
-              <button id="logoutBtn" class="button subtle hidden">ログアウト</button>
-              <button id="migrateBtn" class="button subtle hidden">ローカル予定をFirebaseに移行</button>
+              <button id="migrateBtn" class="button subtle hidden">この端末の予定を同期する</button>
             </div>
           </section>
 
@@ -78,7 +82,7 @@
               </select>
               <button id="notificationBtn" class="button subtle">通知を許可</button>
             </div>
-            <p class="muted">アプリを開いている間だけ、予定時刻の少し前にブラウザ通知します。</p>
+            <p class="muted">アプリを開いている間だけ、<br />予定時刻の少し前にブラウザ通知します。</p>
           </section>
         </aside>
       </main>
@@ -116,6 +120,24 @@
         <div class="dialog-actions">
           <button type="button" id="deleteEventBtn" class="button danger hidden">削除</button>
           <button type="submit" class="button primary">保存</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="syncDeleteDialog" class="dialog confirm-dialog">
+      <form method="dialog">
+        <div class="dialog-header simple">
+          <h2>削除の確認</h2>
+        </div>
+        <p class="confirm-message">この予定はこの端末では削除されています。他の端末でも消してよければ「削除する」を押してください。</p>
+        <article class="confirm-event-card">
+          <strong id="syncDeleteEventTitle" class="event-time"></strong>
+          <p id="syncDeleteEventDate" class="confirm-event-date"></p>
+          <p id="syncDeleteEventMemo" class="event-memo"></p>
+        </article>
+        <div class="dialog-actions">
+          <button type="button" id="syncDeleteCancelBtn" class="button subtle">この端末に戻す</button>
+          <button type="button" id="syncDeleteConfirmBtn" class="button danger">削除する</button>
         </div>
       </form>
     </dialog>

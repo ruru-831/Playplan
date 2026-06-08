@@ -18,6 +18,7 @@ import { firebaseConfig } from "./firebase-config.js";
 
 const STORAGE_KEY = "game-friend-calendar-events";
 const SYNC_META_KEY = "game-friend-calendar-sync-meta";
+const SHARED_SYNC_META_KEY = "__shared";
 const HOUR_HEIGHT = 56;
 const DEFAULT_REMINDER_MINUTES = 5;
 
@@ -35,6 +36,7 @@ const state = {
   firebaseReady: false,
   remoteLoaded: false,
   syncError: "",
+  deletionPromptInProgress: false,
   auth: null,
   db: null,
   unsubscribeEvents: null
@@ -67,6 +69,12 @@ const els = {
   friendName: document.querySelector("#friendName"),
   memo: document.querySelector("#memo"),
   deleteEventBtn: document.querySelector("#deleteEventBtn"),
+  syncDeleteDialog: document.querySelector("#syncDeleteDialog"),
+  syncDeleteEventTitle: document.querySelector("#syncDeleteEventTitle"),
+  syncDeleteEventDate: document.querySelector("#syncDeleteEventDate"),
+  syncDeleteEventMemo: document.querySelector("#syncDeleteEventMemo"),
+  syncDeleteCancelBtn: document.querySelector("#syncDeleteCancelBtn"),
+  syncDeleteConfirmBtn: document.querySelector("#syncDeleteConfirmBtn"),
   authStatus: document.querySelector("#authStatus"),
   syncStatus: document.querySelector("#syncStatus"),
   modeMessage: document.querySelector("#modeMessage"),
@@ -144,20 +152,44 @@ function persistSyncMeta() {
   localStorage.setItem(SYNC_META_KEY, JSON.stringify(state.syncMeta));
 }
 
+function getSharedSyncMeta() {
+  const shared = state.syncMeta[SHARED_SYNC_META_KEY];
+  if (shared && typeof shared === "object" && !Array.isArray(shared)) {
+    return {
+      lastActiveUid: typeof shared.lastActiveUid === "string" ? shared.lastActiveUid : "",
+      eventOwners:
+        shared.eventOwners && typeof shared.eventOwners === "object" && !Array.isArray(shared.eventOwners)
+          ? shared.eventOwners
+          : {},
+      deletedEventRequests:
+        shared.deletedEventRequests &&
+        typeof shared.deletedEventRequests === "object" &&
+        !Array.isArray(shared.deletedEventRequests)
+          ? shared.deletedEventRequests
+          : {}
+    };
+  }
+
+  return { lastActiveUid: "", eventOwners: {}, deletedEventRequests: {} };
+}
+
+function setSharedSyncMeta(nextShared) {
+  state.syncMeta[SHARED_SYNC_META_KEY] = nextShared;
+  persistSyncMeta();
+}
+
 function getUserMeta(uid = state.user?.uid) {
-  if (!uid) return { migrationCompleted: false };
-  return state.syncMeta[uid] || { migrationCompleted: false };
+  if (!uid) return { migrationCompleted: false, pendingLocalIds: [] };
+  return state.syncMeta[uid] || { migrationCompleted: false, pendingLocalIds: [] };
 }
 
 function ensureUserMeta(uid) {
   if (!uid) return;
 
   const current = state.syncMeta[uid] || {};
-  if (Array.isArray(current.pendingLocalIds)) return;
-
   state.syncMeta[uid] = {
     migrationCompleted: Boolean(current.migrationCompleted),
-    pendingLocalIds: current.migrationCompleted ? [] : state.localEvents.map((item) => item.id)
+    pendingLocalIds: Array.isArray(current.pendingLocalIds) ? current.pendingLocalIds : []
   };
   persistSyncMeta();
 }
@@ -178,6 +210,104 @@ function getPendingLocalIds(uid = state.user?.uid) {
 
 function isPendingLocalEventId(eventId) {
   return getPendingLocalIds().includes(eventId);
+}
+
+function getEventOwner(eventId) {
+  return getSharedSyncMeta().eventOwners[eventId] || null;
+}
+
+function getLastActiveUid() {
+  return getSharedSyncMeta().lastActiveUid || "";
+}
+
+function setLastActiveUid(uid) {
+  const shared = getSharedSyncMeta();
+  setSharedSyncMeta({
+    ...shared,
+    lastActiveUid: uid || ""
+  });
+}
+
+function setEventOwners(uid, eventIds) {
+  if (!uid || !eventIds.length) return;
+
+  const shared = getSharedSyncMeta();
+  const nextOwners = { ...shared.eventOwners };
+  eventIds.forEach((eventId) => {
+    nextOwners[eventId] = uid;
+  });
+  setSharedSyncMeta({
+    ...shared,
+    eventOwners: nextOwners
+  });
+}
+
+function removeEventOwner(eventId) {
+  const shared = getSharedSyncMeta();
+  if (!(eventId in shared.eventOwners)) return;
+
+  const nextOwners = { ...shared.eventOwners };
+  delete nextOwners[eventId];
+  setSharedSyncMeta({
+    ...shared,
+    eventOwners: nextOwners
+  });
+}
+
+function registerDeletedEventRequest(eventId, ownerUid) {
+  if (!eventId || !ownerUid) return;
+
+  const shared = getSharedSyncMeta();
+  setSharedSyncMeta({
+    ...shared,
+    deletedEventRequests: {
+      ...shared.deletedEventRequests,
+      [eventId]: ownerUid
+    }
+  });
+}
+
+function getDeletedEventRequests(uid = state.user?.uid) {
+  const requests = getSharedSyncMeta().deletedEventRequests;
+  if (!uid) return {};
+
+  return Object.fromEntries(Object.entries(requests).filter(([, ownerUid]) => ownerUid === uid));
+}
+
+function clearDeletedEventRequest(eventId) {
+  const shared = getSharedSyncMeta();
+  if (!(eventId in shared.deletedEventRequests)) return;
+
+  const nextRequests = { ...shared.deletedEventRequests };
+  delete nextRequests[eventId];
+  setSharedSyncMeta({
+    ...shared,
+    deletedEventRequests: nextRequests
+  });
+}
+
+function refreshPendingLocalIds(uid = state.user?.uid) {
+  if (!uid) return;
+
+  const remoteMap = new Map(state.remoteEvents.map((item) => [item.id, item]));
+  const pendingLocalIds = state.localEvents
+    .filter((localItem) => {
+      const ownerUid = getEventOwner(localItem.id);
+      if (ownerUid && ownerUid !== uid) return false;
+
+      const remoteItem = remoteMap.get(localItem.id);
+      if (!remoteItem) return true;
+      return String(localItem.updated_at || "") > String(remoteItem.updated_at || "");
+    })
+    .map((item) => item.id);
+
+  const current = getUserMeta(uid);
+  state.syncMeta[uid] = {
+    ...current,
+    migrationCompleted: pendingLocalIds.length === 0 ? current.migrationCompleted : false,
+    pendingLocalIds
+  };
+  persistSyncMeta();
 }
 
 function removePendingLocalId(eventId, uid = state.user?.uid) {
@@ -236,9 +366,17 @@ function upsertLocalEvent(nextEvent) {
 }
 
 function removeLocalEvent(id) {
+  const ownerUid = getEventOwner(id);
+  if (ownerUid && (!state.user || state.user.uid !== ownerUid || !state.firebaseReady)) {
+    registerDeletedEventRequest(id, ownerUid);
+  }
+
   state.localEvents = state.localEvents.filter((item) => item.id !== id);
   persistLocalEvents();
   removePendingLocalId(id);
+  if (!ownerUid || (state.user && state.user.uid === ownerUid && state.firebaseReady)) {
+    removeEventOwner(id);
+  }
 }
 
 function sortEvents(a, b) {
@@ -265,11 +403,18 @@ function reconcileVisibleEvents() {
 
 function deriveVisibleEvents() {
   if (!state.user || !state.firebaseReady) {
-    return state.localEvents.map((item) => ({ ...item }));
+    return state.localEvents
+      .filter((item) => {
+        const ownerUid = getEventOwner(item.id);
+        if (!ownerUid) return true;
+        return ownerUid === getLastActiveUid();
+      })
+      .map((item) => ({ ...item }));
   }
 
   if (hasPendingMigration()) {
-    return mergeEvents(state.remoteEvents, state.localEvents);
+    const pendingLocalEvents = state.localEvents.filter((item) => isPendingLocalEventId(item.id));
+    return mergeEvents(pendingLocalEvents, state.remoteEvents);
   }
 
   if (!state.remoteLoaded) {
@@ -281,7 +426,6 @@ function deriveVisibleEvents() {
 
 function hasPendingMigration() {
   if (!state.user) return false;
-  if (getUserMeta().migrationCompleted) return false;
   return getPendingLocalIds().length > 0;
 }
 
@@ -330,6 +474,7 @@ async function setupFirebase() {
       state.authReady = true;
 
       if (user) {
+        setLastActiveUid(user.uid);
         ensureUserMeta(user.uid);
         subscribeToRemoteEvents(user.uid);
       }
@@ -339,7 +484,7 @@ async function setupFirebase() {
     });
   } catch (error) {
     console.error(error);
-    state.syncError = "Firebaseの初期化に失敗しました。";
+    state.syncError = "同期の準備に失敗しました。";
     state.authReady = true;
     renderSyncState();
     render();
@@ -357,18 +502,104 @@ function subscribeToRemoteEvents(uid) {
         .sort(sortEvents);
       state.remoteLoaded = true;
       state.syncError = "";
+      setEventOwners(
+        uid,
+        state.remoteEvents.map((item) => item.id)
+      );
+      refreshPendingLocalIds(uid);
 
       reconcileVisibleEvents();
       render();
+      processDeletedEventRequests(uid);
     },
     (error) => {
       console.error(error);
-      state.syncError = "Firebaseとの同期に失敗しました。";
+      state.syncError = "予定の読み込みに失敗しました。";
       state.remoteLoaded = true;
       reconcileVisibleEvents();
       render();
     }
   );
+}
+
+async function processDeletedEventRequests(uid = state.user?.uid) {
+  if (!uid || state.deletionPromptInProgress || !state.remoteLoaded) return;
+
+  const requests = Object.keys(getDeletedEventRequests(uid));
+  if (!requests.length) return;
+
+  state.deletionPromptInProgress = true;
+
+  try {
+    for (const eventId of requests) {
+      const remoteItem = state.remoteEvents.find((item) => item.id === eventId);
+      clearDeletedEventRequest(eventId);
+
+      if (!remoteItem) {
+        removeEventOwner(eventId);
+        continue;
+      }
+
+      const confirmed = await confirmRemoteDeletion(remoteItem);
+      if (confirmed) {
+        try {
+          await deleteRemoteEvent(eventId);
+          removeEventOwner(eventId);
+        } catch (error) {
+          console.error(error);
+          registerDeletedEventRequest(eventId, uid);
+          state.syncError = "他の端末の予定を削除できませんでした。";
+        }
+        continue;
+      }
+
+      upsertLocalEvent(remoteItem);
+      setEventOwners(uid, [eventId]);
+    }
+  } finally {
+    state.deletionPromptInProgress = false;
+    refreshPendingLocalIds(uid);
+    reconcileVisibleEvents();
+    render();
+  }
+}
+
+function confirmRemoteDeletion(eventItem) {
+  return new Promise((resolve) => {
+    const cleanup = () => {
+      els.syncDeleteConfirmBtn.removeEventListener("click", handleConfirm);
+      els.syncDeleteCancelBtn.removeEventListener("click", handleCancel);
+      els.syncDeleteDialog.removeEventListener("cancel", handleCancel);
+      els.syncDeleteDialog.removeEventListener("close", handleClose);
+    };
+
+    const finish = (result) => {
+      cleanup();
+      if (els.syncDeleteDialog.open) {
+        els.syncDeleteDialog.close();
+      }
+      resolve(result);
+    };
+
+    const handleConfirm = () => finish(true);
+    const handleCancel = () => finish(false);
+    const handleClose = () => finish(false);
+
+    els.syncDeleteEventTitle.textContent = `${formatTimeRange(eventItem)} ${eventItem.friend_name}`;
+    els.syncDeleteEventDate.textContent = formatDeletedEventDate(eventItem);
+    els.syncDeleteEventMemo.textContent = eventItem.memo || "メモはありません";
+
+    els.syncDeleteConfirmBtn.addEventListener("click", handleConfirm);
+    els.syncDeleteCancelBtn.addEventListener("click", handleCancel);
+    els.syncDeleteDialog.addEventListener("cancel", handleCancel);
+    els.syncDeleteDialog.addEventListener("close", handleClose);
+    els.syncDeleteDialog.showModal();
+  });
+}
+
+function formatDeletedEventDate(eventItem) {
+  const date = new Date(`${eventItem.event_date}T00:00:00`);
+  return `${formatJapaneseDate(date)} / ${formatTimeRange(eventItem)}`;
 }
 
 function hasFirebaseConfig(config) {
@@ -382,7 +613,7 @@ function hasFirebaseConfig(config) {
 
 async function handleGoogleLogin() {
   if (!state.firebaseReady || !state.auth) {
-    alert("Firebase設定が未完了のため、Googleログインを開始できません。");
+    alert("ログインの準備がまだ完了していません。");
     return;
   }
 
@@ -391,7 +622,7 @@ async function handleGoogleLogin() {
     await signInWithPopup(state.auth, provider);
   } catch (error) {
     console.error(error);
-    alert("Googleログインに失敗しました。ポップアップブロックや承認設定を確認してください。");
+    alert("Googleログインに失敗しました。ポップアップの許可設定を確認してください。");
   }
 }
 
@@ -409,11 +640,11 @@ async function handleLogout() {
 async function handleMigrateToFirebase() {
   if (!state.user || !state.db) return;
   if (!state.localEvents.length) {
-    alert("移行するローカル予定はありません。");
+    alert("同期する予定はありません。");
     return;
   }
 
-  const confirmed = confirm("ローカル予定をFirebaseに移行します。localStorageのデータは削除されません。続行しますか？");
+  const confirmed = confirm("この端末の予定を、他の端末でも見られるようにします。今の予定はこの端末にも残ります。続けますか？");
   if (!confirmed) return;
 
   try {
@@ -422,18 +653,25 @@ async function handleMigrateToFirebase() {
     );
 
     await Promise.all(writes);
+    setEventOwners(
+      state.user.uid,
+      state.localEvents.map((item) => item.id)
+    );
     setMigrationCompleted(state.user.uid);
     reconcileVisibleEvents();
     render();
-    alert("ローカル予定をFirebaseへ移行しました。");
+    alert("この端末の予定を同期しました。");
   } catch (error) {
     console.error(error);
-    alert("Firebaseへの移行に失敗しました。");
+    alert("予定の同期に失敗しました。");
   }
 }
 
 async function writeRemoteEvent(eventItem) {
   await setDoc(doc(state.db, "users", state.user.uid, "events", eventItem.id), eventItem);
+  setEventOwners(state.user.uid, [eventItem.id]);
+  removePendingLocalId(eventItem.id, state.user.uid);
+  clearDeletedEventRequest(eventItem.id);
 }
 
 async function deleteRemoteEvent(eventId) {
@@ -479,7 +717,7 @@ async function handleSaveEvent(event) {
     await writeRemoteEvent(nextEvent);
   } catch (error) {
     console.error(error);
-    state.syncError = "Firebaseへの保存に失敗しました。ローカルには保存されています。";
+    state.syncError = "予定の保存に失敗しました。この端末には保存されています。";
     renderSyncState();
     render();
   }
@@ -502,7 +740,7 @@ async function handleDeleteEvent() {
     await deleteRemoteEvent(id);
   } catch (error) {
     console.error(error);
-    state.syncError = "Firebaseからの削除に失敗しました。ローカルでは削除済みです。";
+    state.syncError = "予定の削除に失敗しました。この端末では削除されています。";
     renderSyncState();
     render();
   }
@@ -510,9 +748,9 @@ async function handleDeleteEvent() {
 
 function renderSyncState() {
   if (!state.firebaseReady) {
-    els.authStatus.textContent = state.syncError || "Firebase未設定のため、現在はローカル保存のみです。";
-    els.syncStatus.textContent = "この端末の予定は localStorage に保存されます。";
-    els.modeMessage.textContent = "この端末の予定は localStorage に保存されます。";
+    els.authStatus.textContent = state.syncError || "今はこの端末だけで予定を使えます。";
+    els.syncStatus.textContent = "この端末にだけ予定が保存されます。";
+    els.modeMessage.textContent = "この端末の予定を表示しています。";
     els.googleLoginBtn.classList.remove("hidden");
     els.googleLoginBtn.disabled = true;
     els.logoutBtn.classList.add("hidden");
@@ -533,9 +771,9 @@ function renderSyncState() {
   }
 
   if (!state.user) {
-    els.authStatus.textContent = "Googleでログインすると、PCとスマホで同じ予定を見られます。";
-    els.syncStatus.textContent = "未ログインのため、現在はローカル保存のみです。";
-    els.modeMessage.textContent = "未ログインのため、この端末の予定だけを表示しています。";
+    els.authStatus.innerHTML = "Googleでログインすると、<br />PCとスマホで同じ予定を見られます。";
+    els.syncStatus.innerHTML = "まだ同期はしていません。<br />この端末だけに予定が保存されています。";
+    els.modeMessage.textContent = "この端末の予定を表示しています。";
     els.googleLoginBtn.classList.remove("hidden");
     els.logoutBtn.classList.add("hidden");
     els.migrateBtn.classList.add("hidden");
@@ -550,14 +788,14 @@ function renderSyncState() {
     els.syncStatus.textContent = state.syncError;
     els.modeMessage.textContent = state.syncError;
   } else if (hasPendingMigration()) {
-    els.syncStatus.textContent = "ローカル予定は保持中です。移行ボタンを押したときだけFirebaseへ移します。";
-    els.modeMessage.textContent = "未移行のローカル予定を含めて表示中です。移行後はFirebase同期が正本になります。";
+    els.syncStatus.textContent = "別の端末でも予定を見たい場合は、下の移行ボタンを押してください。";
+    els.modeMessage.textContent = "この端末の予定を表示しています。";
   } else if (!state.remoteLoaded) {
-    els.syncStatus.textContent = "Firebaseから予定を読み込み中です。";
-    els.modeMessage.textContent = "Firebaseから予定を読み込み中です。";
+    els.syncStatus.textContent = "予定を読み込んでいます。";
+    els.modeMessage.textContent = "予定を読み込んでいます。";
   } else {
-    els.syncStatus.textContent = "Firebase同期が有効です。";
-    els.modeMessage.textContent = "Firebase同期中です。別端末の変更も反映されます。";
+    els.syncStatus.textContent = "他の端末とも予定を共有できます。";
+    els.modeMessage.textContent = "別の端末で変更した予定も反映されます。";
   }
 
   els.migrateBtn.classList.toggle("hidden", !hasPendingMigration());
@@ -882,7 +1120,7 @@ function renderEventList(root, items) {
 
     const memo = document.createElement("p");
     memo.className = "event-memo";
-    memo.textContent = item.memo || "メモなし";
+    memo.textContent = item.memo || "メモはありません";
 
     main.append(time, friend);
     article.append(main, memo);

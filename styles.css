@@ -423,7 +423,7 @@ h2 {
 
 .side-panel {
   display: grid;
-  grid-template-rows: repeat(4, minmax(0, 1fr));
+  grid-template-rows: auto repeat(3, minmax(0, 1fr));
   gap: 12px;
   overflow: visible;
 }
@@ -444,6 +444,40 @@ h2 {
 
 .auth-panel {
   grid-template-rows: auto auto auto auto;
+  overflow: visible;
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+.auth-heading {
+  align-items: center;
+  margin-bottom: 0;
+}
+
+.auth-panel h2 {
+  margin-bottom: 0;
+}
+
+.auth-panel .muted {
+  margin: 0;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.auth-primary-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.auth-primary-actions .button {
+  width: auto;
+  min-width: 132px;
+}
+
+.auth-panel .mode-message {
+  text-align: left;
 }
 
 .today-panel {
@@ -664,6 +698,14 @@ label {
   gap: 12px;
 }
 
+.dialog-header.simple {
+  grid-template-columns: 1fr;
+}
+
+.dialog-header.simple h2 {
+  grid-column: 1;
+}
+
 .dialog-header h2 {
   grid-column: 2;
   margin: 0;
@@ -676,6 +718,31 @@ label {
 
 .dialog-actions {
   justify-content: flex-end;
+}
+
+.confirm-dialog form {
+  gap: 12px;
+}
+
+.confirm-message {
+  margin: 0;
+  color: var(--text);
+  line-height: 1.6;
+}
+
+.confirm-event-card {
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.confirm-event-date {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
 }
 
 .two-cols {
@@ -722,6 +789,11 @@ label {
   .panel-heading {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .auth-primary-actions .button {
+    width: 100%;
+    min-width: 0;
   }
 
   h1 {
