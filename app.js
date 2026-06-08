@@ -254,6 +254,28 @@ function removeEventOwner(eventId) {
   });
 }
 
+function syncLocalEventsWithRemote(uid = state.user?.uid) {
+  if (!uid) return;
+
+  const remoteIds = new Set(state.remoteEvents.map((item) => item.id));
+  let changed = false;
+
+  state.localEvents = state.localEvents.filter((localItem) => {
+    const ownerUid = getEventOwner(localItem.id);
+    if (ownerUid !== uid) return true;
+    if (remoteIds.has(localItem.id)) return true;
+
+    removePendingLocalId(localItem.id, uid);
+    removeEventOwner(localItem.id);
+    changed = true;
+    return false;
+  });
+
+  if (changed) {
+    persistLocalEvents();
+  }
+}
+
 function registerDeletedEventRequest(eventId, ownerUid) {
   if (!eventId || !ownerUid) return;
 
@@ -506,6 +528,7 @@ function subscribeToRemoteEvents(uid) {
         uid,
         state.remoteEvents.map((item) => item.id)
       );
+      syncLocalEventsWithRemote(uid);
       refreshPendingLocalIds(uid);
 
       reconcileVisibleEvents();

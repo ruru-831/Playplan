@@ -796,6 +796,56 @@ label {
     min-width: 0;
   }
 
+  .dialog {
+    width: min(100%, calc(100% - 16px));
+  }
+
+  .dialog form {
+    gap: 12px;
+    padding: 14px;
+    overflow-x: hidden;
+  }
+
+  .dialog label,
+  .dialog input,
+  .dialog textarea,
+  .dialog select {
+    min-width: 0;
+  }
+
+  .dialog input[type="date"],
+  .dialog input[type="time"] {
+    font-size: 16px;
+  }
+
+  .dialog-header {
+    grid-template-columns: 1fr 40px;
+    gap: 8px;
+  }
+
+  .dialog-header h2 {
+    grid-column: 1;
+    text-align: left;
+  }
+
+  .dialog-header .icon-button {
+    grid-column: 2;
+  }
+
+  .two-cols {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .dialog-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .dialog-actions .button {
+    width: 100%;
+  }
+
   h1 {
     font-size: 25px;
   }
