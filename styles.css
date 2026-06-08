@@ -675,6 +675,7 @@ label {
 
 .dialog {
   width: min(560px, calc(100% - 24px));
+  max-width: calc(100% - 24px);
   padding: 0;
   border: none;
   border-radius: 8px;
@@ -797,13 +798,19 @@ label {
   }
 
   .dialog {
-    width: min(100%, calc(100% - 16px));
+    width: calc(100% - 16px);
+    max-width: calc(100% - 16px);
+    max-height: calc(100dvh - 24px);
+    margin: auto 8px;
   }
 
   .dialog form {
     gap: 12px;
     padding: 14px;
+    max-height: calc(100dvh - 24px);
     overflow-x: hidden;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   .dialog label,
