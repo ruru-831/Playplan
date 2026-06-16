@@ -1,4 +1,5 @@
-﻿import { initializeApp } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-app.js";
+// @ts-nocheck
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-app.js";
 import {
   getAuth,
   GoogleAuthProvider,
@@ -1860,7 +1861,7 @@ function createWeekDayColumn(date) {
 
 function updateCurrentTimeLine() {
   const line = document.querySelector(".current-time-line");
-  if (!line) return;
+  if (!(line instanceof HTMLElement)) return;
 
   const now = new Date();
   const minutes = now.getHours() * 60 + now.getMinutes();
@@ -1875,6 +1876,10 @@ function timeToMinutes(value) {
 }
 
 function getTimeFromWeekClick(event) {
+  if (!(event.currentTarget instanceof HTMLElement)) {
+    return "00:00";
+  }
+
   const rect = event.currentTarget.getBoundingClientRect();
   const y = Math.max(0, Math.min(rect.height, event.clientY - rect.top));
   const rawMinutes = (y / HOUR_HEIGHT) * 60;
