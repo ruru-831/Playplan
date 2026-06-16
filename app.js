@@ -28,6 +28,7 @@ const HOUR_HEIGHT = 56;
 const DEFAULT_REMINDER_MINUTES = 5;
 const PERSONAL_CALENDAR_ID = "personal";
 const INVITE_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const PENDING_INVITE_KEY = "game-friend-calendar-pending-invite";
 const DEFAULT_THEME_COLOR = "#5B7C99";
 const GAME_EVENT_COLOR = "#dff0e4";
 
@@ -41,7 +42,7 @@ const state = {
   activeMemberColor: DEFAULT_THEME_COLOR,
   shareSourceEvent: null,
   pendingInviteJoin: null,
-  pendingInviteCode: new URLSearchParams(window.location.search).get("invite") || "",
+  pendingInviteCode: getInitialPendingInviteCode(),
   currentDate: new Date(),
   lastDateKey: toDateKey(new Date()),
   view: "month",
@@ -188,6 +189,38 @@ function bindEvents() {
 function setDefaultDates() {
   const today = toDateKey(new Date());
   els.eventDate.value = today;
+}
+
+function getInviteCodeFromUrl() {
+  const searchInvite = new URLSearchParams(window.location.search).get("invite");
+  if (searchInvite) return searchInvite;
+
+  const hash = window.location.hash || "";
+  const queryIndex = hash.indexOf("?");
+  if (queryIndex === -1) return "";
+  return new URLSearchParams(hash.slice(queryIndex + 1)).get("invite") || "";
+}
+
+function normalizeInviteCode(value) {
+  const code = String(value || "").trim().toUpperCase();
+  return /^[A-Z0-9]{8,40}$/.test(code) ? code : "";
+}
+
+function getInitialPendingInviteCode() {
+  const urlInviteCode = normalizeInviteCode(getInviteCodeFromUrl());
+  if (urlInviteCode) {
+    sessionStorage.setItem(PENDING_INVITE_KEY, urlInviteCode);
+    return urlInviteCode;
+  }
+  return normalizeInviteCode(sessionStorage.getItem(PENDING_INVITE_KEY));
+}
+
+function clearPendingInviteCode() {
+  state.pendingInviteCode = "";
+  sessionStorage.removeItem(PENDING_INVITE_KEY);
+  const hash = window.location.hash || "";
+  const cleanHash = hash.includes("?") ? hash.slice(0, hash.indexOf("?")) : hash;
+  window.history.replaceState({}, "", `${window.location.pathname}${cleanHash}`);
 }
 
 function showAppMessage({ title = "\u901a\u77e5", message = "", kind = "alert", defaultValue = "" } = {}) {
@@ -1278,7 +1311,7 @@ async function acceptInviteCode(inviteCode) {
     const inviteSnapshot = await getDoc(doc(state.db, "inviteCodes", inviteCode));
     if (!inviteSnapshot.exists()) {
       appAlert("\u5171\u6709\u30ea\u30f3\u30af\u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093\u3067\u3057\u305f\u3002");
-      state.pendingInviteCode = "";
+      clearPendingInviteCode();
       subscribeToActiveEvents();
       return;
     }
@@ -1295,8 +1328,7 @@ async function acceptInviteCode(inviteCode) {
         ...state.sharedCalendars.filter((item) => item.id !== calendarId),
         existingMembership
       ].sort((a, b) => a.name.localeCompare(b.name, "ja") || a.id.localeCompare(b.id));
-      state.pendingInviteCode = "";
-      window.history.replaceState({}, "", `${window.location.pathname}${window.location.hash || ""}`);
+      clearPendingInviteCode();
       switchActiveCalendar({ type: "shared", id: calendarId }, { keepMenuOpen: true });
       return;
     }
@@ -1306,7 +1338,7 @@ async function acceptInviteCode(inviteCode) {
     els.joinColorDialog.showModal();
   } catch (error) {
     console.error(error);
-    state.pendingInviteCode = "";
+    clearPendingInviteCode();
     state.syncError = "\u5171\u6709\u30ab\u30ec\u30f3\u30c0\u30fc\u3078\u306e\u53c2\u52a0\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002";
     subscribeToActiveEvents();
     render();
@@ -1350,9 +1382,8 @@ async function handleJoinColorSubmit(event) {
       { merge: true }
     );
 
-    state.pendingInviteCode = "";
+    clearPendingInviteCode();
     state.pendingInviteJoin = null;
-    window.history.replaceState({}, "", `${window.location.pathname}${window.location.hash || ""}`);
     state.sharedCalendars = [
       ...state.sharedCalendars.filter((item) => item.id !== join.calendarId),
       {
