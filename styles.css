@@ -69,7 +69,7 @@ button {
 .calendar-menu {
   position: fixed;
   top: 0;
-  left: 0;
+  right: 0;
   z-index: 21;
   display: flex;
   flex-direction: column;
@@ -77,7 +77,7 @@ button {
   width: min(320px, calc(100% - 48px));
   height: 100vh;
   padding: 18px;
-  border-right: 1px solid var(--line);
+  border-left: 1px solid var(--line);
   background: var(--surface);
   box-shadow: var(--shadow);
 }
@@ -132,6 +132,19 @@ button {
 .shared-calendar-list.empty {
   color: var(--muted);
   font-size: 14px;
+}
+
+.share-calendar-list {
+  display: grid;
+  gap: 8px;
+  min-height: 80px;
+}
+
+.share-calendar-list.empty {
+  align-items: center;
+  color: var(--muted);
+  font-size: 14px;
+  text-align: center;
 }
 
 .eyebrow {
@@ -203,6 +216,21 @@ h2 {
 .toolbar-spacer,
 .view-switch {
   flex: 1;
+}
+
+.toolbar-spacer {
+  min-width: 0;
+}
+
+.active-calendar-title {
+  display: block;
+  max-width: 220px;
+  overflow: hidden;
+  color: #005731;
+  font-size: 14px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .view-switch {
@@ -762,6 +790,12 @@ select {
   color: var(--text);
 }
 
+input[type="color"] {
+  width: 72px;
+  min-height: 42px;
+  padding: 4px;
+}
+
 textarea {
   resize: vertical;
 }
@@ -785,6 +819,39 @@ label {
 
 .dialog::backdrop {
   background: rgba(12, 22, 31, 0.45);
+}
+
+.toast-root {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 40;
+  display: grid;
+  gap: 10px;
+  width: min(360px, calc(100% - 24px));
+  pointer-events: none;
+}
+
+.toast {
+  padding: 12px 14px;
+  border: 1px solid #b7d9c0;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: var(--shadow);
+  color: var(--text);
+  pointer-events: auto;
+}
+
+.toast strong {
+  display: block;
+  margin-bottom: 4px;
+  color: #005731;
+}
+
+.toast p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
 }
 
 .dialog form {
@@ -1006,7 +1073,7 @@ label {
   }
 
   .toolbar-spacer {
-    display: none;
+    display: block;
   }
 
   .toolbar h2 {

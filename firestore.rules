@@ -24,6 +24,12 @@ service cloud.firestore {
         );
     }
 
+    function validColor(value) {
+      return value is string
+        && value.size() == 7
+        && value.matches('^#[0-9A-Fa-f]{6}$');
+    }
+
     function validEvent(eventId) {
       return eventId.size() > 0
         && eventId.size() <= 120
@@ -37,7 +43,9 @@ service cloud.firestore {
           'memo',
           'reminder_minutes',
           'created_at',
-          'updated_at'
+          'updated_at',
+          'created_by',
+          'creator_color'
         ])
         && request.resource.data.id == eventId
         && request.resource.data.id is string
@@ -46,8 +54,13 @@ service cloud.firestore {
         && request.resource.data.event_date is string
         && request.resource.data.event_date.size() == 10
         && request.resource.data.event_date.matches('^\\d{4}-\\d{2}-\\d{2}$')
-        && request.resource.data.event_type is string
-        && request.resource.data.event_type in ['game', 'other']
+        && (
+          !request.resource.data.keys().hasAny(['event_type'])
+          || (
+            request.resource.data.event_type is string
+            && request.resource.data.event_type in ['game', 'other']
+          )
+        )
         && validTime(request.resource.data.start_time)
         && validTime(request.resource.data.end_time)
         && request.resource.data.reminder_minutes is int
@@ -57,6 +70,18 @@ service cloud.firestore {
         && request.resource.data.friend_name.size() <= 80
         && request.resource.data.memo is string
         && request.resource.data.memo.size() <= 500
+        && (
+          !request.resource.data.keys().hasAny(['created_by'])
+          || (
+            request.resource.data.created_by is string
+            && request.resource.data.created_by.size() > 0
+            && request.resource.data.created_by.size() <= 120
+          )
+        )
+        && (
+          !request.resource.data.keys().hasAny(['creator_color'])
+          || validColor(request.resource.data.creator_color)
+        )
         && validIsoDateString(request.resource.data.created_at)
         && validIsoDateString(request.resource.data.updated_at);
     }
@@ -76,6 +101,12 @@ service cloud.firestore {
     function canEditCalendar(calendarId) {
       return isCalendarMember(calendarId)
         && currentMemberRole(calendarId) in ['owner', 'editor'];
+    }
+
+    function isSharedCalendarOwner(calendarId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/sharedCalendars/$(calendarId))
+        && get(/databases/$(database)/documents/sharedCalendars/$(calendarId)).data.ownerUid == request.auth.uid;
     }
 
     function validCalendarCreate() {
@@ -105,7 +136,13 @@ service cloud.firestore {
         && validIsoDateString(request.resource.data.joinedAt)
         && (
           request.resource.data.keys().hasOnly(['role', 'joinedAt'])
+          || request.resource.data.keys().hasOnly(['role', 'joinedAt', 'themeColor'])
           || request.resource.data.keys().hasOnly(['role', 'joinedAt', 'inviteCodeUsed'])
+          || request.resource.data.keys().hasOnly(['role', 'joinedAt', 'inviteCodeUsed', 'themeColor'])
+        )
+        && (
+          !request.resource.data.keys().hasAny(['themeColor'])
+          || validColor(request.resource.data.themeColor)
         )
         && (
           request.resource.data.role == 'owner'
@@ -122,7 +159,8 @@ service cloud.firestore {
           'role',
           'joinedAt',
           'name',
-          'inviteCode'
+          'inviteCode',
+          'themeColor'
         ])
         && request.resource.data.role in ['owner', 'editor', 'viewer']
         && validIsoDateString(request.resource.data.joinedAt)
@@ -133,6 +171,7 @@ service cloud.firestore {
         && request.resource.data.inviteCode.size() >= 8
         && request.resource.data.inviteCode.size() <= 40
         && request.resource.data.inviteCode.matches('^[A-Z0-9]+$')
+        && validColor(request.resource.data.themeColor)
         && exists(memberPath(calendarId, request.auth.uid))
         && get(memberPath(calendarId, request.auth.uid)).data.role == request.resource.data.role;
     }
@@ -144,8 +183,19 @@ service cloud.firestore {
 
     match /users/{userId}/calendarMemberships/{calendarId} {
       allow read: if isOwnerUser(userId);
-      allow create, update: if isOwnerUser(userId) && validUserMembership(calendarId);
-      allow delete: if isOwnerUser(userId);
+      allow create: if isOwnerUser(userId) && validUserMembership(calendarId);
+      allow update: if (
+          isOwnerUser(userId)
+          && validUserMembership(calendarId)
+        )
+        || (
+          isSharedCalendarOwner(calendarId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name'])
+          && request.resource.data.name is string
+          && request.resource.data.name.size() > 0
+          && request.resource.data.name.size() <= 80
+        );
+      allow delete: if isOwnerUser(userId) || isSharedCalendarOwner(calendarId);
     }
 
     match /inviteCodes/{inviteCode} {
@@ -163,12 +213,17 @@ service cloud.firestore {
         && exists(/databases/$(database)/documents/sharedCalendars/$(request.resource.data.calendarId))
         && get(/databases/$(database)/documents/sharedCalendars/$(request.resource.data.calendarId)).data.ownerUid == request.auth.uid
         && validIsoDateString(request.resource.data.createdAt);
+
+      allow delete: if signedIn()
+        && resource.data.calendarId is string
+        && isSharedCalendarOwner(resource.data.calendarId);
     }
 
     match /sharedCalendars/{calendarId} {
       allow read: if isCalendarMember(calendarId);
       allow create: if validCalendarCreate();
-      allow update: if canEditCalendar(calendarId)
+      allow update: if isCalendarMember(calendarId)
+        && currentMemberRole(calendarId) == 'owner'
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'updatedAt'])
         && request.resource.data.name is string
         && request.resource.data.name.size() > 0
@@ -208,7 +263,18 @@ service cloud.firestore {
 
       match /events/{eventId} {
         allow read: if isCalendarMember(calendarId);
-        allow create, update: if canEditCalendar(calendarId) && validEvent(eventId);
+        allow create: if canEditCalendar(calendarId)
+          && validEvent(eventId)
+          && (
+            !request.resource.data.keys().hasAny(['created_by'])
+            || request.resource.data.created_by == request.auth.uid
+          );
+        allow update: if canEditCalendar(calendarId)
+          && validEvent(eventId)
+          && (
+            !resource.data.keys().hasAny(['created_by'])
+            || request.resource.data.created_by == resource.data.created_by
+          );
         allow delete: if canEditCalendar(calendarId);
       }
     }

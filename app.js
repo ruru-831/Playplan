@@ -1,4 +1,4 @@
-import { initializeApp } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-app.js";
+﻿import { initializeApp } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-app.js";
 import {
   getAuth,
   GoogleAuthProvider,
@@ -13,8 +13,11 @@ import {
   doc,
   getDoc,
   getFirestore,
+  getDocs,
   onSnapshot,
-  setDoc
+  setDoc,
+  updateDoc,
+  writeBatch
 } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
 
@@ -25,19 +28,25 @@ const HOUR_HEIGHT = 56;
 const DEFAULT_REMINDER_MINUTES = 5;
 const PERSONAL_CALENDAR_ID = "personal";
 const INVITE_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const DEFAULT_THEME_COLOR = "#5B7C99";
+const GAME_EVENT_COLOR = "#dff0e4";
 
 const state = {
   localEvents: [],
   remoteEvents: [],
   events: [],
   sharedCalendars: [],
-  activeCalendar: { type: "personal", id: PERSONAL_CALENDAR_ID, name: "個人カレンダー" },
+  activeCalendar: { type: "personal", id: PERSONAL_CALENDAR_ID, name: "\u500b\u4eba\u30ab\u30ec\u30f3\u30c0\u30fc" },
   activeMemberRole: "owner",
+  activeMemberColor: DEFAULT_THEME_COLOR,
+  shareSourceEvent: null,
+  pendingInviteJoin: null,
   pendingInviteCode: new URLSearchParams(window.location.search).get("invite") || "",
   currentDate: new Date(),
   lastDateKey: toDateKey(new Date()),
   view: "month",
   notifiedKeys: new Set(),
+  inAppNotificationsEnabled: false,
   syncMeta: loadSyncMeta(),
   user: null,
   authReady: false,
@@ -59,6 +68,7 @@ const els = {
   monthViewBtn: document.querySelector("#monthViewBtn"),
   weekViewBtn: document.querySelector("#weekViewBtn"),
   periodTitle: document.querySelector("#periodTitle"),
+  activeCalendarTitle: document.querySelector("#activeCalendarTitle"),
   calendarRoot: document.querySelector("#calendarRoot"),
   todayList: document.querySelector("#todayList"),
   searchDate: document.querySelector("#searchDate"),
@@ -79,6 +89,10 @@ const els = {
   friendName: document.querySelector("#friendName"),
   memo: document.querySelector("#memo"),
   deleteEventBtn: document.querySelector("#deleteEventBtn"),
+  shareEventBtn: document.querySelector("#shareEventBtn"),
+  shareEventDialog: document.querySelector("#shareEventDialog"),
+  shareCalendarList: document.querySelector("#shareCalendarList"),
+  cancelShareEventBtn: document.querySelector("#cancelShareEventBtn"),
   syncDeleteDialog: document.querySelector("#syncDeleteDialog"),
   syncDeleteEventTitle: document.querySelector("#syncDeleteEventTitle"),
   syncDeleteEventDate: document.querySelector("#syncDeleteEventDate"),
@@ -98,14 +112,29 @@ const els = {
   personalCalendarBtn: document.querySelector("#personalCalendarBtn"),
   sharedCalendarList: document.querySelector("#sharedCalendarList"),
   createSharedCalendarBtn: document.querySelector("#createSharedCalendarBtn"),
+  renameSharedCalendarBtn: document.querySelector("#renameSharedCalendarBtn"),
   copyInviteLinkBtn: document.querySelector("#copyInviteLinkBtn"),
+  deleteSharedCalendarBtn: document.querySelector("#deleteSharedCalendarBtn"),
   sharedCalendarDialog: document.querySelector("#sharedCalendarDialog"),
   sharedCalendarForm: document.querySelector("#sharedCalendarForm"),
   sharedCalendarName: document.querySelector("#sharedCalendarName"),
-  cancelSharedCalendarBtn: document.querySelector("#cancelSharedCalendarBtn")
+  sharedCalendarColor: document.querySelector("#sharedCalendarColor"),
+  cancelSharedCalendarBtn: document.querySelector("#cancelSharedCalendarBtn"),
+  joinColorDialog: document.querySelector("#joinColorDialog"),
+  joinColorForm: document.querySelector("#joinColorForm"),
+  joinCalendarColor: document.querySelector("#joinCalendarColor"),
+  appMessageDialog: document.querySelector("#appMessageDialog"),
+  appMessageForm: document.querySelector("#appMessageForm"),
+  appMessageTitle: document.querySelector("#appMessageTitle"),
+  appMessageText: document.querySelector("#appMessageText"),
+  appMessageInputLabel: document.querySelector("#appMessageInputLabel"),
+  appMessageInput: document.querySelector("#appMessageInput"),
+  appMessageCancelBtn: document.querySelector("#appMessageCancelBtn"),
+  appMessageOkBtn: document.querySelector("#appMessageOkBtn"),
+  toastRoot: document.querySelector("#toastRoot")
 };
 
-const weekdays = ["日", "月", "火", "水", "木", "金", "土"];
+const weekdays = ["\u65e5", "\u6708", "\u706b", "\u6c34", "\u6728", "\u91d1", "\u571f"];
 
 init();
 
@@ -134,6 +163,8 @@ function bindEvents() {
   els.closeDialogBtn.addEventListener("click", () => els.eventDialog.close());
   els.eventForm.addEventListener("submit", handleSaveEvent);
   els.deleteEventBtn.addEventListener("click", handleDeleteEvent);
+  els.shareEventBtn.addEventListener("click", openShareEventDialog);
+  els.cancelShareEventBtn.addEventListener("click", () => els.shareEventDialog.close());
   els.searchBtn.addEventListener("click", renderSearch);
   els.searchDate.addEventListener("change", renderSearch);
   els.notificationBtn.addEventListener("click", requestNotificationPermission);
@@ -145,14 +176,97 @@ function bindEvents() {
   els.menuOverlay.addEventListener("click", closeMenu);
   els.personalCalendarBtn.addEventListener("click", () => switchActiveCalendar({ type: "personal" }));
   els.createSharedCalendarBtn.addEventListener("click", openSharedCalendarDialog);
+  els.renameSharedCalendarBtn.addEventListener("click", handleRenameSharedCalendar);
   els.cancelSharedCalendarBtn.addEventListener("click", () => els.sharedCalendarDialog.close());
   els.sharedCalendarForm.addEventListener("submit", handleCreateSharedCalendar);
   els.copyInviteLinkBtn.addEventListener("click", handleCopyInviteLink);
+  els.deleteSharedCalendarBtn.addEventListener("click", handleDeleteSharedCalendar);
+  els.joinColorForm.addEventListener("submit", handleJoinColorSubmit);
+  els.joinColorDialog.addEventListener("cancel", (event) => event.preventDefault());
 }
 
 function setDefaultDates() {
   const today = toDateKey(new Date());
   els.eventDate.value = today;
+}
+
+function showAppMessage({ title = "\u901a\u77e5", message = "", kind = "alert", defaultValue = "" } = {}) {
+  return new Promise((resolve) => {
+    const cleanup = () => {
+      els.appMessageForm.removeEventListener("submit", handleSubmit);
+      els.appMessageCancelBtn.removeEventListener("click", handleCancel);
+      els.appMessageDialog.removeEventListener("cancel", handleCancel);
+      els.appMessageDialog.removeEventListener("close", handleClose);
+    };
+
+    const finish = (value) => {
+      cleanup();
+      if (els.appMessageDialog.open) {
+        els.appMessageDialog.close();
+      }
+      resolve(value);
+    };
+
+    const handleSubmit = (event) => {
+      event.preventDefault();
+      if (kind === "prompt") {
+        finish(els.appMessageInput.value);
+        return;
+      }
+      finish(true);
+    };
+    const handleCancel = (event) => {
+      event.preventDefault();
+      finish(kind === "confirm" ? false : null);
+    };
+    const handleClose = () => {
+      cleanup();
+      resolve(kind === "confirm" ? false : null);
+    };
+
+    els.appMessageTitle.textContent = title;
+    els.appMessageText.textContent = message;
+    els.appMessageInput.value = defaultValue;
+    els.appMessageInputLabel.classList.toggle("hidden", kind !== "prompt");
+    els.appMessageCancelBtn.classList.toggle("hidden", kind === "alert");
+    els.appMessageOkBtn.textContent = kind === "confirm" ? "OK" : "OK";
+
+    els.appMessageForm.addEventListener("submit", handleSubmit);
+    els.appMessageCancelBtn.addEventListener("click", handleCancel);
+    els.appMessageDialog.addEventListener("cancel", handleCancel);
+    els.appMessageDialog.addEventListener("close", handleClose);
+    els.appMessageDialog.showModal();
+    if (kind === "prompt") {
+      els.appMessageInput.focus();
+      els.appMessageInput.select();
+    }
+  });
+}
+
+function appAlert(message, title = "\u901a\u77e5") {
+  return showAppMessage({ title, message, kind: "alert" });
+}
+
+function appConfirm(message, title = "\u78ba\u8a8d") {
+  return showAppMessage({ title, message, kind: "confirm" });
+}
+
+function appPrompt(message, defaultValue = "", title = "\u5165\u529b") {
+  return showAppMessage({ title, message, defaultValue, kind: "prompt" });
+}
+function showToast(title, message = "") {
+  if (!els.toastRoot) return;
+  const toast = document.createElement("article");
+  toast.className = "toast";
+  const titleEl = document.createElement("strong");
+  titleEl.textContent = title;
+  const messageEl = document.createElement("p");
+  messageEl.textContent = message;
+  toast.append(titleEl, messageEl);
+  els.toastRoot.appendChild(toast);
+  setTimeout(() => {
+    toast.remove();
+  }, 7000);
 }
 
 function openMenu() {
@@ -178,17 +292,52 @@ function canEditActiveCalendar() {
   return ["owner", "editor"].includes(state.activeMemberRole);
 }
 
+function normalizeThemeColor(value) {
+  const color = String(value || "").trim();
+  return /^#[0-9a-fA-F]{6}$/.test(color) ? color.toUpperCase() : DEFAULT_THEME_COLOR;
+}
+
+function getCurrentMemberColor() {
+  return normalizeThemeColor(state.activeMemberColor);
+}
+
+function updateEventTypeLabels() {
+  const gameLabel = isSharedCalendar() ? "\u3010\u5171\u901a\u3011\u30b2\u30fc\u30e0\u4e88\u5b9a" : "\u30b2\u30fc\u30e0\u4e88\u5b9a";
+  const otherLabel = isSharedCalendar() ? "\u500b\u4eba\u306e\u4e88\u5b9a" : "\u305d\u308c\u4ee5\u5916\u306e\u4e88\u5b9a";
+  const gameOption = els.eventType.querySelector('option[value="game"]');
+  const otherOption = els.eventType.querySelector('option[value="other"]');
+  if (gameOption) gameOption.textContent = gameLabel;
+  if (otherOption) otherOption.textContent = otherLabel;
+}
+
 function getEventTypeClass(eventItem) {
   return eventItem?.event_type === "other" ? "event-other" : "event-game";
 }
 
+function applySharedEventColor(element, eventItem) {
+  if (!isSharedCalendar() || eventItem?.event_type !== "other") return;
+  const color = normalizeThemeColor(eventItem.creator_color);
+  element.style.borderColor = color;
+  element.style.background = color;
+  element.style.color = "#fff";
+}
+
+function applySharedEventListColor(element, eventItem) {
+  if (!isSharedCalendar() || eventItem?.event_type !== "other") return;
+  const color = normalizeThemeColor(eventItem.creator_color);
+  element.style.borderLeftColor = color;
+  const time = element.querySelector(".event-time");
+  if (time) time.style.color = color;
+}
+
 function openSharedCalendarDialog() {
   if (!state.user || !state.firebaseReady) {
-    alert("共有カレンダーを作成するにはGoogleログインが必要です。");
+    appAlert("\u5171\u6709\u30ab\u30ec\u30f3\u30c0\u30fc\u3092\u4f5c\u6210\u3059\u308b\u306b\u306fGoogle\u30ed\u30b0\u30a4\u30f3\u304c\u5fc5\u8981\u3067\u3059\u3002");
     return;
   }
 
   els.sharedCalendarName.value = "";
+  els.sharedCalendarColor.value = DEFAULT_THEME_COLOR;
   els.sharedCalendarDialog.showModal();
 }
 
@@ -437,12 +586,10 @@ function normalizeEvent(raw) {
   const reminder = sanitizeReminder(raw.reminder_minutes);
   const createdAt = String(raw.created_at || new Date().toISOString());
   const updatedAt = String(raw.updated_at || createdAt);
-  const eventType = raw.event_type === "other" ? "other" : "game";
 
-  return {
+  const eventItem = {
     id,
     event_date: eventDate,
-    event_type: eventType,
     start_time: startTime || null,
     end_time: endTime || null,
     friend_name: friendName.slice(0, 80),
@@ -451,6 +598,18 @@ function normalizeEvent(raw) {
     created_at: createdAt,
     updated_at: updatedAt
   };
+
+  if (raw.event_type === "game" || raw.event_type === "other") {
+    eventItem.event_type = raw.event_type;
+  }
+  if (typeof raw.created_by === "string" && raw.created_by.trim()) {
+    eventItem.created_by = raw.created_by.trim().slice(0, 120);
+  }
+  if (typeof raw.creator_color === "string") {
+    eventItem.creator_color = normalizeThemeColor(raw.creator_color);
+  }
+
+  return eventItem;
 }
 
 function sanitizeReminder(value) {
@@ -615,7 +774,7 @@ async function setupFirebase() {
     });
   } catch (error) {
     console.error(error);
-    state.syncError = "同期の準備に失敗しました。";
+    state.syncError = "Sync setup failed.";
     state.authReady = true;
     renderSyncState();
     render();
@@ -637,6 +796,7 @@ function subscribeToMemberships(uid) {
         if (active) {
           state.activeCalendar = { type: "shared", id: active.id, name: active.name, inviteCode: active.inviteCode || "" };
           state.activeMemberRole = active.role;
+          state.activeMemberColor = normalizeThemeColor(active.themeColor);
         } else {
           switchActiveCalendar({ type: "personal" }, { keepMenuOpen: true });
         }
@@ -647,7 +807,7 @@ function subscribeToMemberships(uid) {
     },
     (error) => {
       console.error(error);
-      state.syncError = "共有カレンダー一覧の読み込みに失敗しました。";
+      state.syncError = "\u5171\u6709\u30ab\u30ec\u30f3\u30c0\u30fc\u306e\u8aad\u307f\u8fbc\u307f\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002";
       render();
     }
   );
@@ -663,6 +823,7 @@ function normalizeMembership(raw) {
     id,
     name: name.slice(0, 80),
     role,
+    themeColor: normalizeThemeColor(raw.themeColor),
     inviteCode: typeof raw.inviteCode === "string" ? raw.inviteCode : "",
     joinedAt: String(raw.joinedAt || "")
   };
@@ -711,7 +872,7 @@ function subscribeToPersonalEvents(uid) {
     },
     (error) => {
       console.error(error);
-      state.syncError = "予定の読み込みに失敗しました。";
+      state.syncError = "\u4e88\u5b9a\u306e\u8aad\u307f\u8fbc\u307f\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002";
       state.remoteLoaded = true;
       reconcileVisibleEvents();
       render();
@@ -736,7 +897,7 @@ function subscribeToSharedEvents(calendarId) {
     },
     (error) => {
       console.error(error);
-      state.syncError = "共有カレンダーの予定を読み込めませんでした。";
+      state.syncError = "\u5171\u6709\u30ab\u30ec\u30f3\u30c0\u30fc\u306e\u4e88\u5b9a\u8aad\u307f\u8fbc\u307f\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002";
       state.remoteLoaded = true;
       reconcileVisibleEvents();
       render();
@@ -770,7 +931,7 @@ async function processDeletedEventRequests(uid = state.user?.uid) {
         } catch (error) {
           console.error(error);
           registerDeletedEventRequest(eventId, uid);
-          state.syncError = "他の端末の予定を削除できませんでした。";
+          state.syncError = "\u540c\u671f\u5148\u306e\u4e88\u5b9a\u524a\u9664\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002";
         }
         continue;
       }
@@ -809,7 +970,7 @@ function confirmRemoteDeletion(eventItem) {
 
     els.syncDeleteEventTitle.textContent = `${formatTimeRange(eventItem)} ${eventItem.friend_name}`;
     els.syncDeleteEventDate.textContent = formatDeletedEventDate(eventItem);
-    els.syncDeleteEventMemo.textContent = eventItem.memo || "メモはありません";
+    els.syncDeleteEventMemo.textContent = eventItem.memo || "\u30e1\u30e2\u306f\u3042\u308a\u307e\u305b\u3093";
 
     els.syncDeleteConfirmBtn.addEventListener("click", handleConfirm);
     els.syncDeleteCancelBtn.addEventListener("click", handleCancel);
@@ -844,9 +1005,11 @@ function switchActiveCalendar(nextCalendar, options = {}) {
       inviteCode: membership.inviteCode || ""
     };
     state.activeMemberRole = membership.role;
+    state.activeMemberColor = normalizeThemeColor(membership.themeColor);
   } else {
-    state.activeCalendar = { type: "personal", id: PERSONAL_CALENDAR_ID, name: "個人カレンダー" };
+    state.activeCalendar = { type: "personal", id: PERSONAL_CALENDAR_ID, name: "\u500b\u4eba\u30ab\u30ec\u30f3\u30c0\u30fc" };
     state.activeMemberRole = "owner";
+    state.activeMemberColor = DEFAULT_THEME_COLOR;
   }
 
   state.remoteEvents = [];
@@ -864,7 +1027,7 @@ function renderCalendarMenu() {
   els.sharedCalendarList.replaceChildren();
 
   if (!state.sharedCalendars.length) {
-    els.sharedCalendarList.textContent = state.user ? "共有カレンダーはありません" : "ログイン後に表示されます";
+    els.sharedCalendarList.textContent = state.user ? "\u5171\u6709\u30ab\u30ec\u30f3\u30c0\u30fc\u306f\u3042\u308a\u307e\u305b\u3093" : "\u30ed\u30b0\u30a4\u30f3\u304c\u5fc5\u8981\u3067\u3059";
     els.sharedCalendarList.classList.add("empty");
   } else {
     els.sharedCalendarList.classList.remove("empty");
@@ -879,7 +1042,9 @@ function renderCalendarMenu() {
     });
   }
 
+  els.renameSharedCalendarBtn.classList.toggle("hidden", !(isSharedCalendar() && state.activeMemberRole === "owner"));
   els.copyInviteLinkBtn.classList.toggle("hidden", !isSharedCalendar());
+  els.deleteSharedCalendarBtn.classList.toggle("hidden", !(isSharedCalendar() && state.activeMemberRole === "owner"));
 }
 
 async function handleCreateSharedCalendar(event) {
@@ -891,6 +1056,7 @@ async function handleCreateSharedCalendar(event) {
 
   const now = new Date().toISOString();
   const inviteCode = generateInviteCode();
+  const themeColor = normalizeThemeColor(els.sharedCalendarColor.value);
   let createStep = "shared calendar";
 
   try {
@@ -905,7 +1071,8 @@ async function handleCreateSharedCalendar(event) {
     createStep = "owner member";
     await setDoc(doc(state.db, "sharedCalendars", calendarRef.id, "members", state.user.uid), {
       role: "owner",
-      joinedAt: now
+      joinedAt: now,
+      themeColor
     });
 
     createStep = "membership and invite code";
@@ -914,7 +1081,8 @@ async function handleCreateSharedCalendar(event) {
         role: "owner",
         joinedAt: now,
         name,
-        inviteCode
+        inviteCode,
+        themeColor
       }),
       setDoc(doc(state.db, "inviteCodes", inviteCode), {
         calendarId: calendarRef.id,
@@ -925,12 +1093,12 @@ async function handleCreateSharedCalendar(event) {
     els.sharedCalendarDialog.close();
     state.sharedCalendars = [
       ...state.sharedCalendars.filter((item) => item.id !== calendarRef.id),
-      { id: calendarRef.id, name, role: "owner", inviteCode, joinedAt: now }
+      { id: calendarRef.id, name, role: "owner", inviteCode, joinedAt: now, themeColor }
     ];
     switchActiveCalendar({ type: "shared", id: calendarRef.id }, { keepMenuOpen: true });
   } catch (error) {
     console.error(error);
-    alert(`共有カレンダーの作成に失敗しました。step=${createStep} code=${error.code || "unknown"}`);
+    appAlert(`\u5171\u6709\u30ab\u30ec\u30f3\u30c0\u30fc\u306e\u4f5c\u6210\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002step=${createStep} code=${error.code || "unknown"}`);
   }
 }
 
@@ -944,26 +1112,172 @@ async function handleCopyInviteLink() {
   }
 
   if (!inviteCode) {
-    alert("共有リンクを作成できませんでした。");
+    appAlert("\u5171\u6709\u30ea\u30f3\u30af\u3092\u4f5c\u6210\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f\u3002");
     return;
   }
 
   const link = buildInviteLink(inviteCode);
   try {
     await navigator.clipboard.writeText(link);
-    alert("共有リンクをコピーしました。");
+    appAlert("\u5171\u6709\u30ea\u30f3\u30af\u3092\u30b3\u30d4\u30fc\u3057\u307e\u3057\u305f\u3002");
   } catch (_error) {
-    prompt("共有リンクをコピーしてください。", link);
+    await appPrompt("\u5171\u6709\u30ea\u30f3\u30af\u3092\u30b3\u30d4\u30fc\u3057\u3066\u304f\u3060\u3055\u3044\u3002", link);
   }
 }
+async function handleRenameSharedCalendar() {
+  if (!isSharedCalendar() || state.activeMemberRole !== "owner" || !state.user || !state.db) return;
 
+  const nextName = await appPrompt("\u65b0\u3057\u3044\u30ab\u30ec\u30f3\u30c0\u30fc\u540d\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044\u3002", state.activeCalendar.name || "");
+  const name = String(nextName || "").trim().slice(0, 80);
+  if (!name || name === state.activeCalendar.name) return;
+
+  const now = new Date().toISOString();
+
+  try {
+    await updateDoc(doc(state.db, "sharedCalendars", state.activeCalendar.id), {
+      name,
+      updatedAt: now
+    });
+
+    const membersSnapshot = await getDocs(collection(state.db, "sharedCalendars", state.activeCalendar.id, "members"));
+    const batch = writeBatch(state.db);
+    membersSnapshot.docs.forEach((memberDoc) => {
+      batch.update(doc(state.db, "users", memberDoc.id, "calendarMemberships", state.activeCalendar.id), { name });
+    });
+    await batch.commit();
+
+    state.activeCalendar = { ...state.activeCalendar, name };
+    state.sharedCalendars = state.sharedCalendars.map((calendar) =>
+      calendar.id === state.activeCalendar.id ? { ...calendar, name } : calendar
+    );
+    render();
+    appAlert("\u30ab\u30ec\u30f3\u30c0\u30fc\u540d\u3092\u66f4\u65b0\u3057\u307e\u3057\u305f\u3002");
+  } catch (error) {
+    console.error(error);
+    appAlert("\u30ab\u30ec\u30f3\u30c0\u30fc\u540d\u306e\u66f4\u65b0\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002");
+  }
+}
+async function handleDeleteSharedCalendar() {
+  if (!isSharedCalendar() || state.activeMemberRole !== "owner" || !state.user || !state.db) return;
+
+  const confirmed = await appConfirm(`\u5171\u6709\u30ab\u30ec\u30f3\u30c0\u30fc\u300c${state.activeCalendar.name}\u300d\u3092\u524a\u9664\u3057\u307e\u3059\u304b\uff1f\u3053\u306e\u64cd\u4f5c\u306f\u5143\u306b\u623b\u305b\u307e\u305b\u3093\u3002`);
+  if (!confirmed) return;
+
+  const calendarId = state.activeCalendar.id;
+
+  try {
+    const [eventsSnapshot, membersSnapshot] = await Promise.all([
+      getDocs(collection(state.db, "sharedCalendars", calendarId, "events")),
+      getDocs(collection(state.db, "sharedCalendars", calendarId, "members"))
+    ]);
+
+    const inviteCode = state.activeCalendar.inviteCode || state.sharedCalendars.find((item) => item.id === calendarId)?.inviteCode || "";
+    const batch = writeBatch(state.db);
+
+    eventsSnapshot.docs.forEach((eventDoc) => {
+      batch.delete(doc(state.db, "sharedCalendars", calendarId, "events", eventDoc.id));
+    });
+    membersSnapshot.docs.forEach((memberDoc) => {
+      batch.delete(doc(state.db, "users", memberDoc.id, "calendarMemberships", calendarId));
+      batch.delete(doc(state.db, "sharedCalendars", calendarId, "members", memberDoc.id));
+    });
+    if (inviteCode) {
+      batch.delete(doc(state.db, "inviteCodes", inviteCode));
+    }
+    batch.delete(doc(state.db, "sharedCalendars", calendarId));
+
+    await batch.commit();
+
+    state.sharedCalendars = state.sharedCalendars.filter((calendar) => calendar.id !== calendarId);
+    switchActiveCalendar({ type: "personal" }, { keepMenuOpen: true });
+    appAlert("\u5171\u6709\u30ab\u30ec\u30f3\u30c0\u30fc\u3092\u524a\u9664\u3057\u307e\u3057\u305f\u3002");
+  } catch (error) {
+    console.error(error);
+    appAlert("\u5171\u6709\u30ab\u30ec\u30f3\u30c0\u30fc\u306e\u524a\u9664\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002");
+  }
+}
+function getWritableSharedCalendars() {
+  return state.sharedCalendars.filter((calendar) => ["owner", "editor"].includes(calendar.role));
+}
+
+function openShareEventDialog() {
+  const sourceEvent = state.shareSourceEvent;
+  if (!sourceEvent || !isPersonalCalendar()) return;
+
+  els.shareCalendarList.replaceChildren();
+  const calendars = getWritableSharedCalendars();
+
+  if (!state.user || !state.firebaseReady) {
+    els.shareCalendarList.textContent = "\u5171\u6709\u3059\u308b\u306b\u306fGoogle\u30ed\u30b0\u30a4\u30f3\u304c\u5fc5\u8981\u3067\u3059\u3002";
+    els.shareCalendarList.classList.add("empty");
+  } else if (!calendars.length) {
+    els.shareCalendarList.textContent = "\u5171\u6709\u53ef\u80fd\u306a\u30ab\u30ec\u30f3\u30c0\u30fc\u306f\u3042\u308a\u307e\u305b\u3093\u3002";
+    els.shareCalendarList.classList.add("empty");
+  } else {
+    els.shareCalendarList.classList.remove("empty");
+    calendars.forEach((calendar) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "menu-item";
+      button.textContent = calendar.name;
+      button.addEventListener("click", () => handleShareEventToCalendar(calendar.id));
+      els.shareCalendarList.appendChild(button);
+    });
+  }
+
+  els.shareEventDialog.showModal();
+}
+
+function buildSharedEventCopy(sourceEvent, calendar) {
+  const now = new Date().toISOString();
+  const eventId = crypto.randomUUID();
+  const copiedEvent = {
+    id: eventId,
+    event_date: sourceEvent.event_date,
+    start_time: sourceEvent.start_time || null,
+    end_time: sourceEvent.end_time || null,
+    friend_name: sourceEvent.friend_name,
+    memo: sourceEvent.memo || "",
+    reminder_minutes: sanitizeReminder(sourceEvent.reminder_minutes),
+    created_at: now,
+    updated_at: now,
+    created_by: state.user?.uid || "",
+    creator_color: normalizeThemeColor(calendar?.themeColor)
+  };
+
+  if (sourceEvent.event_type === "game" || sourceEvent.event_type === "other") {
+    copiedEvent.event_type = sourceEvent.event_type;
+  }
+
+  return copiedEvent;
+}
+
+async function handleShareEventToCalendar(calendarId) {
+  const sourceEvent = state.shareSourceEvent;
+  const calendar = getWritableSharedCalendars().find((item) => item.id === calendarId);
+  if (!sourceEvent || !calendar || !state.user || !state.db) {
+    appAlert("\u5171\u6709\u3067\u304d\u307e\u305b\u3093\u3002\u5171\u6709\u5148\u306e\u30ab\u30ec\u30f3\u30c0\u30fc\u3092\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044\u3002");
+    return;
+  }
+
+  const copiedEvent = buildSharedEventCopy(sourceEvent, calendar);
+
+  try {
+    await setDoc(doc(state.db, "sharedCalendars", calendar.id, "events", copiedEvent.id), copiedEvent);
+    els.shareEventDialog.close();
+    appAlert(`${calendar.name} \u306b\u5171\u6709\u3057\u307e\u3057\u305f\u3002`);
+  } catch (error) {
+    console.error(error);
+    appAlert("\u5171\u6709\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002\u6a29\u9650\u3084Firestore Rules\u3092\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044\u3002");
+  }
+}
 async function acceptInviteCode(inviteCode) {
   if (!state.user || !state.db || !inviteCode) return;
 
   try {
     const inviteSnapshot = await getDoc(doc(state.db, "inviteCodes", inviteCode));
     if (!inviteSnapshot.exists()) {
-      alert("共有リンクが見つかりませんでした。");
+      appAlert("\u5171\u6709\u30ea\u30f3\u30af\u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093\u3067\u3057\u305f\u3002");
       state.pendingInviteCode = "";
       subscribeToActiveEvents();
       return;
@@ -980,52 +1294,80 @@ async function acceptInviteCode(inviteCode) {
       return;
     }
 
-    const now = new Date().toISOString();
-    await setDoc(
-      doc(state.db, "sharedCalendars", calendarId, "members", state.user.uid),
-      {
-        role: "editor",
-        joinedAt: now,
-        inviteCodeUsed: inviteCode
-      },
-      { merge: true }
-    );
-
     const calendarSnapshot = await getDoc(doc(state.db, "sharedCalendars", calendarId));
     const calendarData = calendarSnapshot.exists() ? calendarSnapshot.data() : {};
-    const name = String(calendarData.name || "共有カレンダー").slice(0, 80);
+    const name = String(calendarData.name || "\u5171\u6709\u30ab\u30ec\u30f3\u30c0\u30fc").slice(0, 80);
 
-    await setDoc(
-      doc(state.db, "users", state.user.uid, "calendarMemberships", calendarId),
-      {
-        role: "editor",
-        joinedAt: now,
-        name,
-        inviteCode
-      },
-      { merge: true }
-    );
-
-    state.pendingInviteCode = "";
-    window.history.replaceState({}, "", `${window.location.pathname}${window.location.hash || ""}`);
-    state.sharedCalendars = [
-      ...state.sharedCalendars.filter((item) => item.id !== calendarId),
-      { id: calendarId, name, role: "editor", inviteCode, joinedAt: now }
-    ];
-    switchActiveCalendar({ type: "shared", id: calendarId }, { keepMenuOpen: true });
-    alert(`${name} に参加しました。`);
+    state.pendingInviteJoin = { calendarId, inviteCode, name };
+    els.joinCalendarColor.value = DEFAULT_THEME_COLOR;
+    els.joinColorDialog.showModal();
   } catch (error) {
     console.error(error);
     state.pendingInviteCode = "";
-    state.syncError = "共有カレンダーへの参加に失敗しました。";
+    state.syncError = "\u5171\u6709\u30ab\u30ec\u30f3\u30c0\u30fc\u3078\u306e\u53c2\u52a0\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002";
     subscribeToActiveEvents();
     render();
   }
 }
 
+async function handleJoinColorSubmit(event) {
+  event.preventDefault();
+  const join = state.pendingInviteJoin;
+  if (!join || !state.user || !state.db) return;
+
+  const now = new Date().toISOString();
+  const themeColor = normalizeThemeColor(els.joinCalendarColor.value);
+
+  try {
+    await setDoc(
+      doc(state.db, "sharedCalendars", join.calendarId, "members", state.user.uid),
+      {
+        role: "editor",
+        joinedAt: now,
+        inviteCodeUsed: join.inviteCode,
+        themeColor
+      },
+      { merge: true }
+    );
+
+    await setDoc(
+      doc(state.db, "users", state.user.uid, "calendarMemberships", join.calendarId),
+      {
+        role: "editor",
+        joinedAt: now,
+        name: join.name,
+        inviteCode: join.inviteCode,
+        themeColor
+      },
+      { merge: true }
+    );
+
+    state.pendingInviteCode = "";
+    state.pendingInviteJoin = null;
+    window.history.replaceState({}, "", `${window.location.pathname}${window.location.hash || ""}`);
+    state.sharedCalendars = [
+      ...state.sharedCalendars.filter((item) => item.id !== join.calendarId),
+      {
+        id: join.calendarId,
+        name: join.name,
+        role: "editor",
+        inviteCode: join.inviteCode,
+        joinedAt: now,
+        themeColor
+      }
+    ];
+    els.joinColorDialog.close();
+    switchActiveCalendar({ type: "shared", id: join.calendarId }, { keepMenuOpen: true });
+    appAlert(`${join.name} \u306b\u53c2\u52a0\u3057\u307e\u3057\u305f\u3002`);
+  } catch (error) {
+    console.error(error);
+    appAlert("\u5171\u6709\u30ab\u30ec\u30f3\u30c0\u30fc\u3078\u306e\u53c2\u52a0\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002");
+  }
+}
+
 async function handleGoogleLogin() {
   if (!state.firebaseReady || !state.auth) {
-    alert("ログインの準備がまだ完了していません。");
+    appAlert("\u30ed\u30b0\u30a4\u30f3\u306e\u6e96\u5099\u304c\u307e\u3060\u5b8c\u4e86\u3057\u3066\u3044\u307e\u305b\u3093\u3002");
     return;
   }
 
@@ -1034,7 +1376,7 @@ async function handleGoogleLogin() {
     await signInWithPopup(state.auth, provider);
   } catch (error) {
     console.error(error);
-    alert("Googleログインに失敗しました。ポップアップの許可設定を確認してください。");
+    appAlert("Google\u30ed\u30b0\u30a4\u30f3\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002\u30dd\u30c3\u30d7\u30a2\u30c3\u30d7\u306e\u8a31\u53ef\u3092\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044\u3002");
   }
 }
 
@@ -1045,18 +1387,18 @@ async function handleLogout() {
     await signOut(state.auth);
   } catch (error) {
     console.error(error);
-    alert("ログアウトに失敗しました。");
+    appAlert("\u30ed\u30b0\u30a2\u30a6\u30c8\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002");
   }
 }
 
 async function handleMigrateToFirebase() {
   if (!state.user || !state.db) return;
   if (!state.localEvents.length) {
-    alert("同期する予定はありません。");
+    appAlert("\u540c\u671f\u3059\u308b\u4e88\u5b9a\u306f\u3042\u308a\u307e\u305b\u3093\u3002");
     return;
   }
 
-  const confirmed = confirm("この端末の予定を、他の端末でも見られるようにします。今の予定はこの端末にも残ります。続けますか？");
+  const confirmed = await appConfirm("\u3053\u306e\u7aef\u672b\u306e\u4e88\u5b9a\u3092\u3001\u4ed6\u306e\u7aef\u672b\u3067\u3082\u898b\u3089\u308c\u308b\u3088\u3046\u306b\u540c\u671f\u3057\u307e\u3059\u3002\u4e88\u5b9a\u306f\u3053\u306e\u7aef\u672b\u306b\u3082\u6b8b\u308a\u307e\u3059\u3002\u7d9a\u3051\u307e\u3059\u304b\uff1f");
   if (!confirmed) return;
 
   try {
@@ -1072,13 +1414,12 @@ async function handleMigrateToFirebase() {
     setMigrationCompleted(state.user.uid);
     reconcileVisibleEvents();
     render();
-    alert("この端末の予定を同期しました。");
+    appAlert("\u4e88\u5b9a\u3092\u540c\u671f\u3057\u307e\u3057\u305f\u3002");
   } catch (error) {
     console.error(error);
-    alert("予定の同期に失敗しました。");
+    appAlert("\u4e88\u5b9a\u306e\u540c\u671f\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002");
   }
 }
-
 async function writeRemoteEvent(eventItem) {
   if (isSharedCalendar()) {
     await setDoc(doc(state.db, "sharedCalendars", state.activeCalendar.id, "events", eventItem.id), eventItem);
@@ -1123,12 +1464,17 @@ async function handleSaveEvent(event) {
   });
 
   if (!nextEvent) {
-    alert("予定データが不正です。入力内容を確認してください。");
+    appAlert("\u4e88\u5b9a\u306e\u5165\u529b\u5185\u5bb9\u304c\u6b63\u3057\u304f\u3042\u308a\u307e\u305b\u3093\u3002");
     return;
   }
 
+  if (isSharedCalendar()) {
+    nextEvent.created_by = previousEvent?.created_by || state.user?.uid || "";
+    nextEvent.creator_color = normalizeThemeColor(previousEvent?.creator_color || getCurrentMemberColor());
+  }
+
   if (isSharedCalendar() && !canEditActiveCalendar()) {
-    alert("This shared calendar is read-only for your account.");
+    appAlert("\u3053\u306e\u5171\u6709\u30ab\u30ec\u30f3\u30c0\u30fc\u306f\u8aad\u307f\u53d6\u308a\u5c02\u7528\u3067\u3059\u3002");
     return;
   }
 
@@ -1149,7 +1495,7 @@ async function handleSaveEvent(event) {
     await writeRemoteEvent(nextEvent);
   } catch (error) {
     console.error(error);
-    state.syncError = "予定の保存に失敗しました。この端末には保存されています。";
+    state.syncError = "\u4e88\u5b9a\u306e\u4fdd\u5b58\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002\u3053\u306e\u7aef\u672b\u306b\u306f\u4fdd\u5b58\u3055\u308c\u3066\u3044\u307e\u3059\u3002";
     renderSyncState();
     render();
   }
@@ -1157,10 +1503,10 @@ async function handleSaveEvent(event) {
 
 async function handleDeleteEvent() {
   const id = els.eventId.value;
-  if (!id || !confirm("この予定を削除しますか？")) return;
+  if (!id || !(await appConfirm("\u3053\u306e\u4e88\u5b9a\u3092\u524a\u9664\u3057\u307e\u3059\u304b\uff1f"))) return;
 
   if (isSharedCalendar() && !canEditActiveCalendar()) {
-    alert("This shared calendar is read-only for your account.");
+    appAlert("\u3053\u306e\u5171\u6709\u30ab\u30ec\u30f3\u30c0\u30fc\u306f\u8aad\u307f\u53d6\u308a\u5c02\u7528\u3067\u3059\u3002");
     return;
   }
 
@@ -1181,17 +1527,16 @@ async function handleDeleteEvent() {
     await deleteRemoteEvent(id);
   } catch (error) {
     console.error(error);
-    state.syncError = "予定の削除に失敗しました。この端末では削除されています。";
+    state.syncError = "\u4e88\u5b9a\u306e\u524a\u9664\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002\u3053\u306e\u7aef\u672b\u4e0a\u3067\u306f\u524a\u9664\u6e08\u307f\u3067\u3059\u3002";
     renderSyncState();
     render();
   }
 }
-
 function renderSyncState() {
   if (!state.firebaseReady) {
-    els.authStatus.textContent = state.syncError || "今はこの端末だけで予定を使えます。";
-    els.syncStatus.textContent = "この端末にだけ予定が保存されます。";
-    els.modeMessage.textContent = "この端末の予定を表示しています。";
+    els.authStatus.textContent = state.syncError || "\u4eca\u306f\u3053\u306e\u7aef\u672b\u3060\u3051\u3067\u4e88\u5b9a\u3092\u4f7f\u3048\u307e\u3059\u3002";
+    els.syncStatus.textContent = "\u3053\u306e\u7aef\u672b\u306b\u3060\u3051\u4e88\u5b9a\u304c\u4fdd\u5b58\u3055\u308c\u307e\u3059\u3002";
+    els.modeMessage.textContent = "\u3053\u306e\u7aef\u672b\u306e\u4e88\u5b9a\u3092\u8868\u793a\u3057\u3066\u3044\u307e\u3059\u3002";
     els.googleLoginBtn.classList.remove("hidden");
     els.googleLoginBtn.disabled = true;
     els.logoutBtn.classList.add("hidden");
@@ -1202,9 +1547,9 @@ function renderSyncState() {
   els.googleLoginBtn.disabled = false;
 
   if (!state.authReady) {
-    els.authStatus.textContent = "認証状態を確認しています。";
-    els.syncStatus.textContent = "しばらくお待ちください。";
-    els.modeMessage.textContent = "認証状態を確認しています。";
+    els.authStatus.textContent = "\u8a8d\u8a3c\u72b6\u614b\u3092\u78ba\u8a8d\u3057\u3066\u3044\u307e\u3059\u3002";
+    els.syncStatus.textContent = "\u3057\u3070\u3089\u304f\u304a\u5f85\u3061\u304f\u3060\u3055\u3044\u3002";
+    els.modeMessage.textContent = "\u8a8d\u8a3c\u72b6\u614b\u3092\u78ba\u8a8d\u3057\u3066\u3044\u307e\u3059\u3002";
     els.googleLoginBtn.classList.add("hidden");
     els.logoutBtn.classList.add("hidden");
     els.migrateBtn.classList.add("hidden");
@@ -1212,30 +1557,30 @@ function renderSyncState() {
   }
 
   if (!state.user) {
-    els.authStatus.innerHTML = "Googleでログインすると、<br />PCとスマホで同じ予定を見られます。";
-    els.syncStatus.innerHTML = "まだ同期はしていません。<br />この端末だけに予定が保存されています。";
-    els.modeMessage.textContent = "この端末の予定を表示しています。";
+    els.authStatus.textContent = "Google\u3067\u30ed\u30b0\u30a4\u30f3\u3059\u308b\u3068\u3001PC\u3068\u30b9\u30de\u30db\u3067\u540c\u3058\u4e88\u5b9a\u3092\u898b\u3089\u308c\u307e\u3059\u3002";
+    els.syncStatus.textContent = "\u307e\u3060\u540c\u671f\u306f\u3057\u3066\u3044\u307e\u305b\u3093\u3002\u3053\u306e\u7aef\u672b\u3060\u3051\u306b\u4e88\u5b9a\u304c\u4fdd\u5b58\u3055\u308c\u3066\u3044\u307e\u3059\u3002";
+    els.modeMessage.textContent = "\u3053\u306e\u7aef\u672b\u306e\u4e88\u5b9a\u3092\u8868\u793a\u3057\u3066\u3044\u307e\u3059\u3002";
     els.googleLoginBtn.classList.remove("hidden");
     els.logoutBtn.classList.add("hidden");
     els.migrateBtn.classList.add("hidden");
     return;
   }
 
-  els.authStatus.textContent = state.user.email || "Googleアカウントでログイン中です。";
+  els.authStatus.textContent = state.user.email || "Google\u30a2\u30ab\u30a6\u30f3\u30c8\u3067\u30ed\u30b0\u30a4\u30f3\u4e2d\u3067\u3059\u3002";
   els.googleLoginBtn.classList.add("hidden");
   els.logoutBtn.classList.remove("hidden");
 
   if (isSharedCalendar()) {
     const roleLabels = {
-      owner: "オーナー",
-      editor: "編集者",
-      viewer: "閲覧のみ"
+      owner: "\u30aa\u30fc\u30ca\u30fc",
+      editor: "\u7de8\u96c6\u8005",
+      viewer: "\u95b2\u89a7\u306e\u307f"
     };
-    const roleLabel = roleLabels[state.activeMemberRole] || "閲覧のみ";
-    els.syncStatus.textContent = `共有カレンダー: ${state.activeCalendar.name}（${roleLabel}）`;
+    const roleLabel = roleLabels[state.activeMemberRole] || "\u95b2\u89a7\u306e\u307f";
+    els.syncStatus.textContent = `\u5171\u6709\u30ab\u30ec\u30f3\u30c0\u30fc: ${state.activeCalendar.name}\u3000${roleLabel}`;
     els.modeMessage.textContent = canEditActiveCalendar()
-      ? "共有カレンダーの予定を表示しています。"
-      : "この共有カレンダーは読み取り専用です。";
+      ? "\u5171\u6709\u30ab\u30ec\u30f3\u30c0\u30fc\u306e\u4e88\u5b9a\u3092\u8868\u793a\u3057\u3066\u3044\u307e\u3059\u3002"
+      : "\u3053\u306e\u5171\u6709\u30ab\u30ec\u30f3\u30c0\u30fc\u306f\u8aad\u307f\u53d6\u308a\u5c02\u7528\u3067\u3059\u3002";
     els.migrateBtn.classList.add("hidden");
     return;
   }
@@ -1244,19 +1589,18 @@ function renderSyncState() {
     els.syncStatus.textContent = state.syncError;
     els.modeMessage.textContent = state.syncError;
   } else if (hasPendingMigration()) {
-    els.syncStatus.textContent = "別の端末でも予定を見たい場合は、下の移行ボタンを押してください。";
-    els.modeMessage.textContent = "この端末の予定を表示しています。";
+    els.syncStatus.textContent = "\u5225\u306e\u7aef\u672b\u3067\u3082\u4e88\u5b9a\u3092\u898b\u305f\u3044\u5834\u5408\u306f\u3001\u4e0b\u306e\u79fb\u884c\u30dc\u30bf\u30f3\u3092\u62bc\u3057\u3066\u304f\u3060\u3055\u3044\u3002";
+    els.modeMessage.textContent = "\u3053\u306e\u7aef\u672b\u306e\u4e88\u5b9a\u3092\u8868\u793a\u3057\u3066\u3044\u307e\u3059\u3002";
   } else if (!state.remoteLoaded) {
-    els.syncStatus.textContent = "予定を読み込んでいます。";
-    els.modeMessage.textContent = "予定を読み込んでいます。";
+    els.syncStatus.textContent = "\u4e88\u5b9a\u3092\u8aad\u307f\u8fbc\u3093\u3067\u3044\u307e\u3059\u3002";
+    els.modeMessage.textContent = "\u4e88\u5b9a\u3092\u8aad\u307f\u8fbc\u3093\u3067\u3044\u307e\u3059\u3002";
   } else {
-    els.syncStatus.textContent = "他の端末とも予定を共有できます。";
-    els.modeMessage.textContent = "別の端末で変更した予定も反映されます。";
+    els.syncStatus.textContent = "\u4ed6\u306e\u7aef\u672b\u3068\u3082\u4e88\u5b9a\u3092\u5171\u6709\u3067\u304d\u307e\u3059\u3002";
+    els.modeMessage.textContent = "\u5225\u306e\u7aef\u672b\u3067\u5909\u66f4\u3057\u305f\u4e88\u5b9a\u3082\u53cd\u6620\u3055\u308c\u307e\u3059\u3002";
   }
 
   els.migrateBtn.classList.toggle("hidden", !hasPendingMigration());
 }
-
 function setView(view) {
   state.view = view;
   els.monthViewBtn.classList.toggle("active", view === "month");
@@ -1276,6 +1620,8 @@ function movePeriod(direction) {
 }
 
 function render() {
+  els.activeCalendarTitle.textContent = state.activeCalendar.name || "\u500b\u4eba\u30ab\u30ec\u30f3\u30c0\u30fc";
+  updateEventTypeLabels();
   if (state.view === "month") renderMonth();
   if (state.view === "week") renderWeek();
   renderToday();
@@ -1310,7 +1656,7 @@ function syncSidePanelHeight() {
 function renderMonth() {
   const year = state.currentDate.getFullYear();
   const month = state.currentDate.getMonth();
-  els.periodTitle.textContent = `${year}年 ${month + 1}月`;
+  els.periodTitle.textContent = `${year}\u5e74 ${month + 1}\u6708`;
 
   const firstDay = new Date(year, month, 1);
   const start = new Date(firstDay);
@@ -1417,6 +1763,7 @@ function createDayCell(date, isMuted) {
     const chip = document.createElement("button");
     chip.className = "event-chip";
     chip.classList.add(getEventTypeClass(item));
+    applySharedEventColor(chip, item);
     chip.type = "button";
     chip.textContent = `${formatTimeRange(item)} ${item.friend_name}`;
     chip.addEventListener("click", (clickEvent) => {
@@ -1444,6 +1791,7 @@ function createWeekDayColumn(date) {
     const eventButton = document.createElement("button");
     eventButton.className = "week-event";
     eventButton.classList.add(getEventTypeClass(item));
+    applySharedEventColor(eventButton, item);
     eventButton.type = "button";
     eventButton.style.top = `${(topMinutes / 60) * HOUR_HEIGHT}px`;
     eventButton.style.height = `${(durationMinutes / 60) * HOUR_HEIGHT}px`;
@@ -1544,7 +1892,7 @@ function isUpcomingTodayEvent(eventItem) {
 
 function renderSearch() {
   if (!els.searchDate.value) {
-    els.searchResult.textContent = "日付を選んでください";
+    els.searchResult.textContent = "\u65e5\u4ed8\u3092\u9078\u3093\u3067\u304f\u3060\u3055\u3044";
     els.searchResult.classList.add("empty");
     return;
   }
@@ -1554,7 +1902,7 @@ function renderSearch() {
 function renderEventList(root, items) {
   root.replaceChildren();
   if (!items.length) {
-    root.textContent = "予定はありません";
+    root.textContent = "\u4e88\u5b9a\u306f\u3042\u308a\u307e\u305b\u3093";
     root.classList.add("empty");
     return;
   }
@@ -1580,10 +1928,11 @@ function renderEventList(root, items) {
 
     const memo = document.createElement("p");
     memo.className = "event-memo";
-    memo.textContent = item.memo || "メモはありません";
+    memo.textContent = item.memo || "\u30e1\u30e2\u306f\u3042\u308a\u307e\u305b\u3093";
 
     main.append(time, friend);
     article.append(main, memo);
+    applySharedEventListColor(article, item);
     button.appendChild(article);
     root.appendChild(button);
   });
@@ -1591,11 +1940,12 @@ function renderEventList(root, items) {
 
 function openEventDialog(dateKey, item = null) {
   if (isSharedCalendar() && !canEditActiveCalendar() && !item) {
-    alert("This shared calendar is read-only for your account.");
+    appAlert("\u3053\u306e\u5171\u6709\u30ab\u30ec\u30f3\u30c0\u30fc\u306f\u8aad\u307f\u53d6\u308a\u5c02\u7528\u3067\u3059\u3002");
     return;
   }
 
-  els.dialogTitle.textContent = item ? "予定を編集" : "予定を追加";
+  state.shareSourceEvent = isPersonalCalendar() && item ? { ...item } : null;
+  els.dialogTitle.textContent = item ? "\u4e88\u5b9a\u3092\u7de8\u96c6" : "\u4e88\u5b9a\u3092\u8ffd\u52a0";
   els.eventId.value = item?.id || "";
   els.eventDate.value = item?.event_date || dateKey;
   els.eventType.value = item?.event_type === "other" ? "other" : "game";
@@ -1610,6 +1960,7 @@ function openEventDialog(dateKey, item = null) {
   });
   els.eventForm.querySelector('button[type="submit"]').classList.toggle("hidden", readOnly);
   els.deleteEventBtn.classList.toggle("hidden", !item || readOnly);
+  els.shareEventBtn.classList.toggle("hidden", !(isPersonalCalendar() && item));
   els.eventDialog.showModal();
 }
 
@@ -1620,17 +1971,12 @@ function getEventsByDate(dateKey) {
 }
 
 async function requestNotificationPermission() {
-  if (!("Notification" in window)) {
-    alert("このブラウザは通知に対応していません。");
-    return;
-  }
-
-  const result = await Notification.requestPermission();
-  alert(result === "granted" ? "通知を許可しました。" : "通知は許可されませんでした。");
+  state.inAppNotificationsEnabled = true;
+  await appAlert("\u30a2\u30d7\u30ea\u5185\u901a\u77e5\u3092\u30aa\u30f3\u306b\u3057\u307e\u3057\u305f\u3002PlayPlan\u3092\u958b\u3044\u3066\u3044\u308b\u9593\u3001\u4e88\u5b9a\u306e\u30ea\u30de\u30a4\u30f3\u30c0\u30fc\u3092\u753b\u9762\u5185\u306b\u8868\u793a\u3057\u307e\u3059\u3002");
 }
 
 function checkReminders() {
-  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  if (!state.inAppNotificationsEnabled) return;
 
   const now = new Date();
   state.events.forEach((eventItem) => {
@@ -1643,19 +1989,16 @@ function checkReminders() {
     const key = `${eventItem.id}:${eventItem.event_date}:${eventItem.start_time}`;
     if (diff <= 30000 && !state.notifiedKeys.has(key)) {
       state.notifiedKeys.add(key);
-      new Notification("ゲーム予定の時間です", {
-        body: `${formatTimeRange(eventItem)} ${eventItem.friend_name}`
-      });
+      showToast("\u4e88\u5b9a\u306e\u6642\u9593\u3067\u3059", `${formatTimeRange(eventItem)} ${eventItem.friend_name}`);
     }
   });
 }
-
 function formatTimeRange(eventItem) {
   const start = normalizeTime(eventItem.start_time);
   const end = normalizeTime(eventItem.end_time);
   if (start && end) return `${start}-${end}`;
   if (start) return start;
-  return "時刻未設定";
+  return "\u6642\u523b\u672a\u8a2d\u5b9a";
 }
 
 function normalizeTime(value) {
@@ -1676,5 +2019,5 @@ function getNextDateKey(dateKey) {
 }
 
 function formatJapaneseDate(date) {
-  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+  return `${date.getFullYear()}\u5e74${date.getMonth() + 1}\u6708${date.getDate()}\u65e5`;
 }
