@@ -1286,19 +1286,22 @@ async function acceptInviteCode(inviteCode) {
     const calendarId = String(inviteSnapshot.data().calendarId || "");
     if (!calendarId) throw new Error("Invite code has no calendarId.");
 
-    const existingMembership = state.sharedCalendars.find((item) => item.id === calendarId);
+    const membershipSnapshot = await getDoc(doc(state.db, "users", state.user.uid, "calendarMemberships", calendarId));
+    const existingMembership = membershipSnapshot.exists()
+      ? normalizeMembership({ id: calendarId, ...membershipSnapshot.data() })
+      : state.sharedCalendars.find((item) => item.id === calendarId);
     if (existingMembership) {
+      state.sharedCalendars = [
+        ...state.sharedCalendars.filter((item) => item.id !== calendarId),
+        existingMembership
+      ].sort((a, b) => a.name.localeCompare(b.name, "ja") || a.id.localeCompare(b.id));
       state.pendingInviteCode = "";
       window.history.replaceState({}, "", `${window.location.pathname}${window.location.hash || ""}`);
       switchActiveCalendar({ type: "shared", id: calendarId }, { keepMenuOpen: true });
       return;
     }
 
-    const calendarSnapshot = await getDoc(doc(state.db, "sharedCalendars", calendarId));
-    const calendarData = calendarSnapshot.exists() ? calendarSnapshot.data() : {};
-    const name = String(calendarData.name || "\u5171\u6709\u30ab\u30ec\u30f3\u30c0\u30fc").slice(0, 80);
-
-    state.pendingInviteJoin = { calendarId, inviteCode, name };
+    state.pendingInviteJoin = { calendarId, inviteCode, name: "\u5171\u6709\u30ab\u30ec\u30f3\u30c0\u30fc" };
     els.joinCalendarColor.value = DEFAULT_THEME_COLOR;
     els.joinColorDialog.showModal();
   } catch (error) {
@@ -1330,13 +1333,18 @@ async function handleJoinColorSubmit(event) {
       { merge: true }
     );
 
+    const calendarSnapshot = await getDoc(doc(state.db, "sharedCalendars", join.calendarId));
+    const calendarData = calendarSnapshot.exists() ? calendarSnapshot.data() : {};
+    const calendarName = String(calendarData.name || join.name || "\u5171\u6709\u30ab\u30ec\u30f3\u30c0\u30fc").slice(0, 80);
+    const inviteCode = String(calendarData.inviteCode || join.inviteCode || "");
+
     await setDoc(
       doc(state.db, "users", state.user.uid, "calendarMemberships", join.calendarId),
       {
         role: "editor",
         joinedAt: now,
-        name: join.name,
-        inviteCode: join.inviteCode,
+        name: calendarName,
+        inviteCode,
         themeColor
       },
       { merge: true }
@@ -1349,16 +1357,16 @@ async function handleJoinColorSubmit(event) {
       ...state.sharedCalendars.filter((item) => item.id !== join.calendarId),
       {
         id: join.calendarId,
-        name: join.name,
+        name: calendarName,
         role: "editor",
-        inviteCode: join.inviteCode,
+        inviteCode,
         joinedAt: now,
         themeColor
       }
     ];
     els.joinColorDialog.close();
     switchActiveCalendar({ type: "shared", id: join.calendarId }, { keepMenuOpen: true });
-    appAlert(`${join.name} \u306b\u53c2\u52a0\u3057\u307e\u3057\u305f\u3002`);
+    appAlert(`${calendarName} \u306b\u53c2\u52a0\u3057\u307e\u3057\u305f\u3002`);
   } catch (error) {
     console.error(error);
     appAlert("\u5171\u6709\u30ab\u30ec\u30f3\u30c0\u30fc\u3078\u306e\u53c2\u52a0\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002");
