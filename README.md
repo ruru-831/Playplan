@@ -1,4 +1,4 @@
-# Game Friend Calendar
+# PlayPlan
 
 HTML / CSS / JavaScript だけで動く個人用カレンダーです。既存の予定は `localStorage` に保存され、今回の変更で Firebase Authentication + Cloud Firestore による個人同期にも対応しました。
 

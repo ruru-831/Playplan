@@ -53,6 +53,87 @@ button {
   margin-bottom: 20px;
 }
 
+.menu-button {
+  flex: 0 0 auto;
+  order: 2;
+  margin-left: auto;
+}
+
+.menu-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background: rgba(12, 22, 31, 0.36);
+}
+
+.calendar-menu {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 21;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(320px, calc(100% - 48px));
+  height: 100vh;
+  padding: 18px;
+  border-right: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.menu-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.menu-header h2,
+.menu-section h3 {
+  margin: 0;
+}
+
+.menu-section {
+  display: grid;
+  gap: 8px;
+  min-height: 0;
+}
+
+.menu-section h3 {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.menu-item {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 700;
+  text-align: left;
+}
+
+.menu-item.active {
+  border-color: #005731;
+  background: #e8f3ec;
+  color: #005731;
+}
+
+.shared-calendar-list {
+  display: grid;
+  gap: 6px;
+  overflow-y: auto;
+}
+
+.shared-calendar-list.empty {
+  color: var(--muted);
+  font-size: 14px;
+}
+
 .eyebrow {
   margin: 0 0 4px;
   color: #005731;
@@ -323,6 +404,12 @@ h2 {
   text-align: left;
 }
 
+.week-event.event-other {
+  border-color: #496b88;
+  background: #5b7c99;
+  color: #fff;
+}
+
 .week-event strong,
 .week-event span {
   display: block;
@@ -419,6 +506,12 @@ h2 {
   text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.event-chip.event-other {
+  border-color: #496b88;
+  background: #5b7c99;
+  color: #fff;
 }
 
 .side-panel {
@@ -630,6 +723,14 @@ h2 {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fff;
+}
+
+.event-item.event-other {
+  border-left: 5px solid #5b7c99;
+}
+
+.event-item.event-other .event-time {
+  color: #5b7c99;
 }
 
 .event-time {

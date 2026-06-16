@@ -7,9 +7,11 @@ import {
   signOut
 } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-auth.js";
 import {
+  addDoc,
   collection,
   deleteDoc,
   doc,
+  getDoc,
   getFirestore,
   onSnapshot,
   setDoc
@@ -21,11 +23,17 @@ const SYNC_META_KEY = "game-friend-calendar-sync-meta";
 const SHARED_SYNC_META_KEY = "__shared";
 const HOUR_HEIGHT = 56;
 const DEFAULT_REMINDER_MINUTES = 5;
+const PERSONAL_CALENDAR_ID = "personal";
+const INVITE_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 const state = {
   localEvents: [],
   remoteEvents: [],
   events: [],
+  sharedCalendars: [],
+  activeCalendar: { type: "personal", id: PERSONAL_CALENDAR_ID, name: "個人カレンダー" },
+  activeMemberRole: "owner",
+  pendingInviteCode: new URLSearchParams(window.location.search).get("invite") || "",
   currentDate: new Date(),
   lastDateKey: toDateKey(new Date()),
   view: "month",
@@ -39,7 +47,8 @@ const state = {
   deletionPromptInProgress: false,
   auth: null,
   db: null,
-  unsubscribeEvents: null
+  unsubscribeEvents: null,
+  unsubscribeMemberships: null
 };
 
 const els = {
@@ -64,6 +73,7 @@ const els = {
   dialogTitle: document.querySelector("#dialogTitle"),
   eventId: document.querySelector("#eventId"),
   eventDate: document.querySelector("#eventDate"),
+  eventType: document.querySelector("#eventType"),
   startTime: document.querySelector("#startTime"),
   endTime: document.querySelector("#endTime"),
   friendName: document.querySelector("#friendName"),
@@ -80,7 +90,19 @@ const els = {
   modeMessage: document.querySelector("#modeMessage"),
   googleLoginBtn: document.querySelector("#googleLoginBtn"),
   logoutBtn: document.querySelector("#logoutBtn"),
-  migrateBtn: document.querySelector("#migrateBtn")
+  migrateBtn: document.querySelector("#migrateBtn"),
+  menuBtn: document.querySelector("#menuBtn"),
+  closeMenuBtn: document.querySelector("#closeMenuBtn"),
+  menuOverlay: document.querySelector("#menuOverlay"),
+  calendarMenu: document.querySelector("#calendarMenu"),
+  personalCalendarBtn: document.querySelector("#personalCalendarBtn"),
+  sharedCalendarList: document.querySelector("#sharedCalendarList"),
+  createSharedCalendarBtn: document.querySelector("#createSharedCalendarBtn"),
+  copyInviteLinkBtn: document.querySelector("#copyInviteLinkBtn"),
+  sharedCalendarDialog: document.querySelector("#sharedCalendarDialog"),
+  sharedCalendarForm: document.querySelector("#sharedCalendarForm"),
+  sharedCalendarName: document.querySelector("#sharedCalendarName"),
+  cancelSharedCalendarBtn: document.querySelector("#cancelSharedCalendarBtn")
 };
 
 const weekdays = ["日", "月", "火", "水", "木", "金", "土"];
@@ -118,11 +140,70 @@ function bindEvents() {
   els.googleLoginBtn.addEventListener("click", handleGoogleLogin);
   els.logoutBtn.addEventListener("click", handleLogout);
   els.migrateBtn.addEventListener("click", handleMigrateToFirebase);
+  els.menuBtn.addEventListener("click", openMenu);
+  els.closeMenuBtn.addEventListener("click", closeMenu);
+  els.menuOverlay.addEventListener("click", closeMenu);
+  els.personalCalendarBtn.addEventListener("click", () => switchActiveCalendar({ type: "personal" }));
+  els.createSharedCalendarBtn.addEventListener("click", openSharedCalendarDialog);
+  els.cancelSharedCalendarBtn.addEventListener("click", () => els.sharedCalendarDialog.close());
+  els.sharedCalendarForm.addEventListener("submit", handleCreateSharedCalendar);
+  els.copyInviteLinkBtn.addEventListener("click", handleCopyInviteLink);
 }
 
 function setDefaultDates() {
   const today = toDateKey(new Date());
   els.eventDate.value = today;
+}
+
+function openMenu() {
+  els.calendarMenu.classList.remove("hidden");
+  els.menuOverlay.classList.remove("hidden");
+}
+
+function closeMenu() {
+  els.calendarMenu.classList.add("hidden");
+  els.menuOverlay.classList.add("hidden");
+}
+
+function isPersonalCalendar() {
+  return state.activeCalendar.type === "personal";
+}
+
+function isSharedCalendar() {
+  return state.activeCalendar.type === "shared";
+}
+
+function canEditActiveCalendar() {
+  if (isPersonalCalendar()) return true;
+  return ["owner", "editor"].includes(state.activeMemberRole);
+}
+
+function getEventTypeClass(eventItem) {
+  return eventItem?.event_type === "other" ? "event-other" : "event-game";
+}
+
+function openSharedCalendarDialog() {
+  if (!state.user || !state.firebaseReady) {
+    alert("共有カレンダーを作成するにはGoogleログインが必要です。");
+    return;
+  }
+
+  els.sharedCalendarName.value = "";
+  els.sharedCalendarDialog.showModal();
+}
+
+function generateInviteCode(length = 12) {
+  const values = new Uint32Array(length);
+  crypto.getRandomValues(values);
+  return Array.from(values, (value) => INVITE_CODE_CHARS[value % INVITE_CODE_CHARS.length]).join("");
+}
+
+function buildInviteLink(inviteCode) {
+  const url = new URL(window.location.href);
+  url.search = "";
+  url.hash = "";
+  url.searchParams.set("invite", inviteCode);
+  return url.toString();
 }
 
 function loadLocalEvents() {
@@ -356,10 +437,12 @@ function normalizeEvent(raw) {
   const reminder = sanitizeReminder(raw.reminder_minutes);
   const createdAt = String(raw.created_at || new Date().toISOString());
   const updatedAt = String(raw.updated_at || createdAt);
+  const eventType = raw.event_type === "other" ? "other" : "game";
 
   return {
     id,
     event_date: eventDate,
+    event_type: eventType,
     start_time: startTime || null,
     end_time: endTime || null,
     friend_name: friendName.slice(0, 80),
@@ -424,6 +507,11 @@ function reconcileVisibleEvents() {
 }
 
 function deriveVisibleEvents() {
+  if (isSharedCalendar()) {
+    if (!state.user || !state.firebaseReady || !state.remoteLoaded) return [];
+    return state.remoteEvents.map((item) => ({ ...item }));
+  }
+
   if (!state.user || !state.firebaseReady) {
     return state.localEvents
       .filter((item) => {
@@ -456,6 +544,10 @@ function isRemoteEventId(eventId) {
 }
 
 function shouldSyncEvent(nextEvent, previousLocalEvent) {
+  if (isSharedCalendar()) {
+    return Boolean(state.user && state.firebaseReady && canEditActiveCalendar());
+  }
+
   if (!state.user || !state.firebaseReady) return false;
   if (getUserMeta().migrationCompleted) return true;
   if (!previousLocalEvent) return true;
@@ -464,6 +556,10 @@ function shouldSyncEvent(nextEvent, previousLocalEvent) {
 }
 
 function shouldDeleteRemotely(eventId) {
+  if (isSharedCalendar()) {
+    return Boolean(state.user && state.firebaseReady && canEditActiveCalendar());
+  }
+
   if (!state.user || !state.firebaseReady) return false;
   if (getUserMeta().migrationCompleted) return true;
   return isRemoteEventId(eventId);
@@ -487,18 +583,31 @@ async function setupFirebase() {
       if (typeof state.unsubscribeEvents === "function") {
         state.unsubscribeEvents();
       }
+      if (typeof state.unsubscribeMemberships === "function") {
+        state.unsubscribeMemberships();
+      }
 
       state.user = user;
       state.remoteEvents = [];
       state.remoteLoaded = !user;
       state.syncError = "";
       state.unsubscribeEvents = null;
+      state.unsubscribeMemberships = null;
       state.authReady = true;
+      state.sharedCalendars = [];
+      state.activeMemberRole = isPersonalCalendar() ? "owner" : "";
 
       if (user) {
         setLastActiveUid(user.uid);
         ensureUserMeta(user.uid);
-        subscribeToRemoteEvents(user.uid);
+        subscribeToMemberships(user.uid);
+        if (state.pendingInviteCode) {
+          acceptInviteCode(state.pendingInviteCode);
+        } else {
+          subscribeToActiveEvents();
+        }
+      } else {
+        switchActiveCalendar({ type: "personal" }, { keepMenuOpen: true });
       }
 
       reconcileVisibleEvents();
@@ -513,7 +622,72 @@ async function setupFirebase() {
   }
 }
 
-function subscribeToRemoteEvents(uid) {
+function subscribeToMemberships(uid) {
+  const membershipsRef = collection(state.db, "users", uid, "calendarMemberships");
+  state.unsubscribeMemberships = onSnapshot(
+    membershipsRef,
+    (snapshot) => {
+      state.sharedCalendars = snapshot.docs
+        .map((item) => normalizeMembership({ id: item.id, ...item.data() }))
+        .filter(Boolean)
+        .sort((a, b) => a.name.localeCompare(b.name, "ja") || a.id.localeCompare(b.id));
+
+      if (isSharedCalendar()) {
+        const active = state.sharedCalendars.find((item) => item.id === state.activeCalendar.id);
+        if (active) {
+          state.activeCalendar = { type: "shared", id: active.id, name: active.name, inviteCode: active.inviteCode || "" };
+          state.activeMemberRole = active.role;
+        } else {
+          switchActiveCalendar({ type: "personal" }, { keepMenuOpen: true });
+        }
+      }
+
+      renderCalendarMenu();
+      renderSyncState();
+    },
+    (error) => {
+      console.error(error);
+      state.syncError = "共有カレンダー一覧の読み込みに失敗しました。";
+      render();
+    }
+  );
+}
+
+function normalizeMembership(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const id = String(raw.id || raw.calendarId || "").trim();
+  const name = String(raw.name || "").trim();
+  const role = String(raw.role || "viewer");
+  if (!id || !name || !["owner", "editor", "viewer"].includes(role)) return null;
+  return {
+    id,
+    name: name.slice(0, 80),
+    role,
+    inviteCode: typeof raw.inviteCode === "string" ? raw.inviteCode : "",
+    joinedAt: String(raw.joinedAt || "")
+  };
+}
+
+function subscribeToActiveEvents() {
+  if (!state.user || !state.firebaseReady) return;
+
+  if (typeof state.unsubscribeEvents === "function") {
+    state.unsubscribeEvents();
+  }
+
+  state.remoteEvents = [];
+  state.remoteLoaded = false;
+  state.syncError = "";
+
+  if (isSharedCalendar()) {
+    subscribeToSharedEvents(state.activeCalendar.id);
+    return;
+  }
+
+  subscribeToPersonalEvents(state.user.uid);
+}
+
+function subscribeToPersonalEvents(uid) {
   const eventsRef = collection(state.db, "users", uid, "events");
   state.unsubscribeEvents = onSnapshot(
     eventsRef,
@@ -538,6 +712,31 @@ function subscribeToRemoteEvents(uid) {
     (error) => {
       console.error(error);
       state.syncError = "予定の読み込みに失敗しました。";
+      state.remoteLoaded = true;
+      reconcileVisibleEvents();
+      render();
+    }
+  );
+}
+
+function subscribeToSharedEvents(calendarId) {
+  const eventsRef = collection(state.db, "sharedCalendars", calendarId, "events");
+  state.unsubscribeEvents = onSnapshot(
+    eventsRef,
+    (snapshot) => {
+      state.remoteEvents = snapshot.docs
+        .map((item) => normalizeEvent({ id: item.id, ...item.data() }))
+        .filter(Boolean)
+        .sort(sortEvents);
+      state.remoteLoaded = true;
+      state.syncError = "";
+
+      reconcileVisibleEvents();
+      render();
+    },
+    (error) => {
+      console.error(error);
+      state.syncError = "共有カレンダーの予定を読み込めませんでした。";
       state.remoteLoaded = true;
       reconcileVisibleEvents();
       render();
@@ -634,6 +833,196 @@ function hasFirebaseConfig(config) {
   });
 }
 
+function switchActiveCalendar(nextCalendar, options = {}) {
+  if (nextCalendar.type === "shared") {
+    const membership = state.sharedCalendars.find((item) => item.id === nextCalendar.id);
+    if (!membership) return;
+    state.activeCalendar = {
+      type: "shared",
+      id: membership.id,
+      name: membership.name,
+      inviteCode: membership.inviteCode || ""
+    };
+    state.activeMemberRole = membership.role;
+  } else {
+    state.activeCalendar = { type: "personal", id: PERSONAL_CALENDAR_ID, name: "個人カレンダー" };
+    state.activeMemberRole = "owner";
+  }
+
+  state.remoteEvents = [];
+  state.remoteLoaded = !state.user;
+  state.syncError = "";
+  subscribeToActiveEvents();
+  reconcileVisibleEvents();
+  render();
+  renderCalendarMenu();
+  if (!options.keepMenuOpen) closeMenu();
+}
+
+function renderCalendarMenu() {
+  els.personalCalendarBtn.classList.toggle("active", isPersonalCalendar());
+  els.sharedCalendarList.replaceChildren();
+
+  if (!state.sharedCalendars.length) {
+    els.sharedCalendarList.textContent = state.user ? "共有カレンダーはありません" : "ログイン後に表示されます";
+    els.sharedCalendarList.classList.add("empty");
+  } else {
+    els.sharedCalendarList.classList.remove("empty");
+    state.sharedCalendars.forEach((calendar) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "menu-item";
+      button.classList.toggle("active", isSharedCalendar() && state.activeCalendar.id === calendar.id);
+      button.textContent = calendar.name;
+      button.addEventListener("click", () => switchActiveCalendar({ type: "shared", id: calendar.id }));
+      els.sharedCalendarList.appendChild(button);
+    });
+  }
+
+  els.copyInviteLinkBtn.classList.toggle("hidden", !isSharedCalendar());
+}
+
+async function handleCreateSharedCalendar(event) {
+  event.preventDefault();
+  if (!state.user || !state.db) return;
+
+  const name = els.sharedCalendarName.value.trim().slice(0, 80);
+  if (!name) return;
+
+  const now = new Date().toISOString();
+  const inviteCode = generateInviteCode();
+  let createStep = "shared calendar";
+
+  try {
+    const calendarRef = await addDoc(collection(state.db, "sharedCalendars"), {
+      name,
+      ownerUid: state.user.uid,
+      inviteCode,
+      createdAt: now,
+      updatedAt: now
+    });
+
+    createStep = "owner member";
+    await setDoc(doc(state.db, "sharedCalendars", calendarRef.id, "members", state.user.uid), {
+      role: "owner",
+      joinedAt: now
+    });
+
+    createStep = "membership and invite code";
+    await Promise.all([
+      setDoc(doc(state.db, "users", state.user.uid, "calendarMemberships", calendarRef.id), {
+        role: "owner",
+        joinedAt: now,
+        name,
+        inviteCode
+      }),
+      setDoc(doc(state.db, "inviteCodes", inviteCode), {
+        calendarId: calendarRef.id,
+        createdAt: now
+      })
+    ]);
+
+    els.sharedCalendarDialog.close();
+    state.sharedCalendars = [
+      ...state.sharedCalendars.filter((item) => item.id !== calendarRef.id),
+      { id: calendarRef.id, name, role: "owner", inviteCode, joinedAt: now }
+    ];
+    switchActiveCalendar({ type: "shared", id: calendarRef.id }, { keepMenuOpen: true });
+  } catch (error) {
+    console.error(error);
+    alert(`共有カレンダーの作成に失敗しました。step=${createStep} code=${error.code || "unknown"}`);
+  }
+}
+
+async function handleCopyInviteLink() {
+  if (!isSharedCalendar()) return;
+
+  let inviteCode = state.activeCalendar.inviteCode;
+  if (!inviteCode) {
+    const membership = state.sharedCalendars.find((item) => item.id === state.activeCalendar.id);
+    inviteCode = membership?.inviteCode || "";
+  }
+
+  if (!inviteCode) {
+    alert("共有リンクを作成できませんでした。");
+    return;
+  }
+
+  const link = buildInviteLink(inviteCode);
+  try {
+    await navigator.clipboard.writeText(link);
+    alert("共有リンクをコピーしました。");
+  } catch (_error) {
+    prompt("共有リンクをコピーしてください。", link);
+  }
+}
+
+async function acceptInviteCode(inviteCode) {
+  if (!state.user || !state.db || !inviteCode) return;
+
+  try {
+    const inviteSnapshot = await getDoc(doc(state.db, "inviteCodes", inviteCode));
+    if (!inviteSnapshot.exists()) {
+      alert("共有リンクが見つかりませんでした。");
+      state.pendingInviteCode = "";
+      subscribeToActiveEvents();
+      return;
+    }
+
+    const calendarId = String(inviteSnapshot.data().calendarId || "");
+    if (!calendarId) throw new Error("Invite code has no calendarId.");
+
+    const existingMembership = state.sharedCalendars.find((item) => item.id === calendarId);
+    if (existingMembership) {
+      state.pendingInviteCode = "";
+      window.history.replaceState({}, "", `${window.location.pathname}${window.location.hash || ""}`);
+      switchActiveCalendar({ type: "shared", id: calendarId }, { keepMenuOpen: true });
+      return;
+    }
+
+    const now = new Date().toISOString();
+    await setDoc(
+      doc(state.db, "sharedCalendars", calendarId, "members", state.user.uid),
+      {
+        role: "editor",
+        joinedAt: now,
+        inviteCodeUsed: inviteCode
+      },
+      { merge: true }
+    );
+
+    const calendarSnapshot = await getDoc(doc(state.db, "sharedCalendars", calendarId));
+    const calendarData = calendarSnapshot.exists() ? calendarSnapshot.data() : {};
+    const name = String(calendarData.name || "共有カレンダー").slice(0, 80);
+
+    await setDoc(
+      doc(state.db, "users", state.user.uid, "calendarMemberships", calendarId),
+      {
+        role: "editor",
+        joinedAt: now,
+        name,
+        inviteCode
+      },
+      { merge: true }
+    );
+
+    state.pendingInviteCode = "";
+    window.history.replaceState({}, "", `${window.location.pathname}${window.location.hash || ""}`);
+    state.sharedCalendars = [
+      ...state.sharedCalendars.filter((item) => item.id !== calendarId),
+      { id: calendarId, name, role: "editor", inviteCode, joinedAt: now }
+    ];
+    switchActiveCalendar({ type: "shared", id: calendarId }, { keepMenuOpen: true });
+    alert(`${name} に参加しました。`);
+  } catch (error) {
+    console.error(error);
+    state.pendingInviteCode = "";
+    state.syncError = "共有カレンダーへの参加に失敗しました。";
+    subscribeToActiveEvents();
+    render();
+  }
+}
+
 async function handleGoogleLogin() {
   if (!state.firebaseReady || !state.auth) {
     alert("ログインの準備がまだ完了していません。");
@@ -691,6 +1080,11 @@ async function handleMigrateToFirebase() {
 }
 
 async function writeRemoteEvent(eventItem) {
+  if (isSharedCalendar()) {
+    await setDoc(doc(state.db, "sharedCalendars", state.activeCalendar.id, "events", eventItem.id), eventItem);
+    return;
+  }
+
   await setDoc(doc(state.db, "users", state.user.uid, "events", eventItem.id), eventItem);
   setEventOwners(state.user.uid, [eventItem.id]);
   removePendingLocalId(eventItem.id, state.user.uid);
@@ -698,6 +1092,11 @@ async function writeRemoteEvent(eventItem) {
 }
 
 async function deleteRemoteEvent(eventId) {
+  if (isSharedCalendar()) {
+    await deleteDoc(doc(state.db, "sharedCalendars", state.activeCalendar.id, "events", eventId));
+    return;
+  }
+
   await deleteDoc(doc(state.db, "users", state.user.uid, "events", eventId));
 }
 
@@ -717,6 +1116,7 @@ async function handleSaveEvent(event) {
     end_time: els.endTime.value || null,
     friend_name: els.friendName.value.trim(),
     memo: els.memo.value.trim(),
+    event_type: els.eventType.value === "other" ? "other" : "game",
     reminder_minutes: sanitizeReminder(els.reminderMinutes.value),
     created_at: previousEvent?.created_at || now,
     updated_at: now
@@ -727,7 +1127,16 @@ async function handleSaveEvent(event) {
     return;
   }
 
-  upsertLocalEvent(nextEvent);
+  if (isSharedCalendar() && !canEditActiveCalendar()) {
+    alert("This shared calendar is read-only for your account.");
+    return;
+  }
+
+  if (isPersonalCalendar()) {
+    upsertLocalEvent(nextEvent);
+  } else {
+    state.remoteEvents = mergeEvents([nextEvent], state.remoteEvents);
+  }
   reconcileVisibleEvents();
   els.eventDialog.close();
   render();
@@ -750,7 +1159,16 @@ async function handleDeleteEvent() {
   const id = els.eventId.value;
   if (!id || !confirm("この予定を削除しますか？")) return;
 
-  removeLocalEvent(id);
+  if (isSharedCalendar() && !canEditActiveCalendar()) {
+    alert("This shared calendar is read-only for your account.");
+    return;
+  }
+
+  if (isPersonalCalendar()) {
+    removeLocalEvent(id);
+  } else {
+    state.remoteEvents = state.remoteEvents.filter((item) => item.id !== id);
+  }
   reconcileVisibleEvents();
   els.eventDialog.close();
   render();
@@ -807,6 +1225,21 @@ function renderSyncState() {
   els.googleLoginBtn.classList.add("hidden");
   els.logoutBtn.classList.remove("hidden");
 
+  if (isSharedCalendar()) {
+    const roleLabels = {
+      owner: "オーナー",
+      editor: "編集者",
+      viewer: "閲覧のみ"
+    };
+    const roleLabel = roleLabels[state.activeMemberRole] || "閲覧のみ";
+    els.syncStatus.textContent = `共有カレンダー: ${state.activeCalendar.name}（${roleLabel}）`;
+    els.modeMessage.textContent = canEditActiveCalendar()
+      ? "共有カレンダーの予定を表示しています。"
+      : "この共有カレンダーは読み取り専用です。";
+    els.migrateBtn.classList.add("hidden");
+    return;
+  }
+
   if (state.syncError) {
     els.syncStatus.textContent = state.syncError;
     els.modeMessage.textContent = state.syncError;
@@ -848,6 +1281,7 @@ function render() {
   renderToday();
   renderSearch();
   renderSyncState();
+  renderCalendarMenu();
   syncSidePanelHeight();
 }
 
@@ -982,6 +1416,7 @@ function createDayCell(date, isMuted) {
   getEventsByDate(key).forEach((item) => {
     const chip = document.createElement("button");
     chip.className = "event-chip";
+    chip.classList.add(getEventTypeClass(item));
     chip.type = "button";
     chip.textContent = `${formatTimeRange(item)} ${item.friend_name}`;
     chip.addEventListener("click", (clickEvent) => {
@@ -1008,6 +1443,7 @@ function createWeekDayColumn(date) {
   getWeekEventSegments(key).forEach(({ item, topMinutes, durationMinutes }) => {
     const eventButton = document.createElement("button");
     eventButton.className = "week-event";
+    eventButton.classList.add(getEventTypeClass(item));
     eventButton.type = "button";
     eventButton.style.top = `${(topMinutes / 60) * HOUR_HEIGHT}px`;
     eventButton.style.height = `${(durationMinutes / 60) * HOUR_HEIGHT}px`;
@@ -1131,6 +1567,7 @@ function renderEventList(root, items) {
 
     const article = document.createElement("article");
     article.className = "event-item";
+    article.classList.add(getEventTypeClass(item));
 
     const main = document.createElement("div");
     const time = document.createElement("strong");
@@ -1153,15 +1590,26 @@ function renderEventList(root, items) {
 }
 
 function openEventDialog(dateKey, item = null) {
+  if (isSharedCalendar() && !canEditActiveCalendar() && !item) {
+    alert("This shared calendar is read-only for your account.");
+    return;
+  }
+
   els.dialogTitle.textContent = item ? "予定を編集" : "予定を追加";
   els.eventId.value = item?.id || "";
   els.eventDate.value = item?.event_date || dateKey;
+  els.eventType.value = item?.event_type === "other" ? "other" : "game";
   els.startTime.value = normalizeTime(item?.start_time) || "";
   els.endTime.value = normalizeTime(item?.end_time) || "";
   els.friendName.value = item?.friend_name || "";
   els.memo.value = item?.memo || "";
   els.reminderMinutes.value = String(sanitizeReminder(item?.reminder_minutes));
-  els.deleteEventBtn.classList.toggle("hidden", !item);
+  const readOnly = isSharedCalendar() && !canEditActiveCalendar();
+  [els.eventDate, els.eventType, els.startTime, els.endTime, els.friendName, els.memo, els.reminderMinutes].forEach((input) => {
+    input.disabled = readOnly;
+  });
+  els.eventForm.querySelector('button[type="submit"]').classList.toggle("hidden", readOnly);
+  els.deleteEventBtn.classList.toggle("hidden", !item || readOnly);
   els.eventDialog.showModal();
 }
 

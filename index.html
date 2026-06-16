@@ -3,17 +3,33 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Game Friend Calendar</title>
+    <title>PlayPlan</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <div class="app-shell">
       <header class="topbar">
+        <button id="menuBtn" class="icon-button menu-button" aria-label="メニューを開く">☰</button>
         <div>
-          <p class="eyebrow">Friend Schedule</p>
-          <h1>Calendar</h1>
+          <p class="eyebrow">Schedule Share</p>
+          <h1>PlayPlan</h1>
         </div>
       </header>
+
+      <div id="menuOverlay" class="menu-overlay hidden"></div>
+      <nav id="calendarMenu" class="calendar-menu hidden" aria-label="カレンダーメニュー">
+        <div class="menu-header">
+          <h2>メニュー</h2>
+          <button id="closeMenuBtn" class="icon-button" aria-label="メニューを閉じる">×</button>
+        </div>
+        <button id="personalCalendarBtn" class="menu-item active" type="button">個人カレンダー</button>
+        <div class="menu-section">
+          <h3>共有カレンダー</h3>
+          <div id="sharedCalendarList" class="shared-calendar-list empty">共有カレンダーはありません</div>
+        </div>
+        <button id="createSharedCalendarBtn" class="button primary" type="button">共有カレンダーを作成</button>
+        <button id="copyInviteLinkBtn" class="button subtle hidden" type="button">共有リンクをコピー</button>
+      </nav>
 
       <main class="layout">
         <div class="calendar-column">
@@ -99,6 +115,13 @@
           日付
           <input id="eventDate" type="date" required />
         </label>
+        <label>
+          予定の種類
+          <select id="eventType">
+            <option value="game">ゲーム予定</option>
+            <option value="other">それ以外の予定</option>
+          </select>
+        </label>
         <div class="two-cols">
           <label>
             開始時刻
@@ -138,6 +161,22 @@
         <div class="dialog-actions">
           <button type="button" id="syncDeleteCancelBtn" class="button subtle">この端末に戻す</button>
           <button type="button" id="syncDeleteConfirmBtn" class="button danger">削除する</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="sharedCalendarDialog" class="dialog">
+      <form id="sharedCalendarForm" method="dialog">
+        <div class="dialog-header simple">
+          <h2>共有カレンダーを作成</h2>
+        </div>
+        <label>
+          カレンダー名
+          <input id="sharedCalendarName" type="text" maxlength="80" placeholder="APEX固定メンバー" required />
+        </label>
+        <div class="dialog-actions">
+          <button type="button" id="cancelSharedCalendarBtn" class="button subtle">キャンセル</button>
+          <button type="submit" class="button primary">作成</button>
         </div>
       </form>
     </dialog>

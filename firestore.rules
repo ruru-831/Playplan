@@ -1,16 +1,36 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /users/{userId}/events/{eventId} {
-      allow read, delete: if request.auth != null && request.auth.uid == userId;
+    function signedIn() {
+      return request.auth != null;
+    }
 
-      allow create, update: if request.auth != null
-        && request.auth.uid == userId
-        && eventId.size() > 0
+    function isOwnerUser(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function validIsoDateString(value) {
+      return value is string
+        && value.size() >= 20
+        && value.size() <= 40;
+    }
+
+    function validTime(value) {
+      return value == null
+        || (
+          value is string
+          && value.size() == 5
+          && value.matches('^([01]\\d|2[0-3]):[0-5]\\d$')
+        );
+    }
+
+    function validEvent(eventId) {
+      return eventId.size() > 0
         && eventId.size() <= 120
         && request.resource.data.keys().hasOnly([
           'id',
           'event_date',
+          'event_type',
           'start_time',
           'end_time',
           'friend_name',
@@ -26,22 +46,10 @@ service cloud.firestore {
         && request.resource.data.event_date is string
         && request.resource.data.event_date.size() == 10
         && request.resource.data.event_date.matches('^\\d{4}-\\d{2}-\\d{2}$')
-        && (
-          request.resource.data.start_time == null
-          || (
-            request.resource.data.start_time is string
-            && request.resource.data.start_time.size() == 5
-            && request.resource.data.start_time.matches('^([01]\\d|2[0-3]):[0-5]\\d$')
-          )
-        )
-        && (
-          request.resource.data.end_time == null
-          || (
-            request.resource.data.end_time is string
-            && request.resource.data.end_time.size() == 5
-            && request.resource.data.end_time.matches('^([01]\\d|2[0-3]):[0-5]\\d$')
-          )
-        )
+        && request.resource.data.event_type is string
+        && request.resource.data.event_type in ['game', 'other']
+        && validTime(request.resource.data.start_time)
+        && validTime(request.resource.data.end_time)
         && request.resource.data.reminder_minutes is int
         && request.resource.data.reminder_minutes in [0, 5, 10, 30, 60]
         && request.resource.data.friend_name is string
@@ -49,12 +57,160 @@ service cloud.firestore {
         && request.resource.data.friend_name.size() <= 80
         && request.resource.data.memo is string
         && request.resource.data.memo.size() <= 500
-        && request.resource.data.created_at is string
-        && request.resource.data.created_at.size() >= 20
-        && request.resource.data.created_at.size() <= 40
-        && request.resource.data.updated_at is string
-        && request.resource.data.updated_at.size() >= 20
-        && request.resource.data.updated_at.size() <= 40;
+        && validIsoDateString(request.resource.data.created_at)
+        && validIsoDateString(request.resource.data.updated_at);
+    }
+
+    function memberPath(calendarId, uid) {
+      return /databases/$(database)/documents/sharedCalendars/$(calendarId)/members/$(uid);
+    }
+
+    function isCalendarMember(calendarId) {
+      return signedIn() && exists(memberPath(calendarId, request.auth.uid));
+    }
+
+    function currentMemberRole(calendarId) {
+      return get(memberPath(calendarId, request.auth.uid)).data.role;
+    }
+
+    function canEditCalendar(calendarId) {
+      return isCalendarMember(calendarId)
+        && currentMemberRole(calendarId) in ['owner', 'editor'];
+    }
+
+    function validCalendarCreate() {
+      return signedIn()
+        && request.resource.data.keys().hasOnly([
+          'name',
+          'ownerUid',
+          'inviteCode',
+          'createdAt',
+          'updatedAt'
+        ])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 80
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.inviteCode is string
+        && request.resource.data.inviteCode.size() >= 8
+        && request.resource.data.inviteCode.size() <= 40
+        && request.resource.data.inviteCode.matches('^[A-Z0-9]+$')
+        && validIsoDateString(request.resource.data.createdAt)
+        && validIsoDateString(request.resource.data.updatedAt);
+    }
+
+    function validMembership(calendarId, userId) {
+      return request.resource.data.role in ['owner', 'editor', 'viewer']
+        && request.resource.data.joinedAt is string
+        && validIsoDateString(request.resource.data.joinedAt)
+        && (
+          request.resource.data.keys().hasOnly(['role', 'joinedAt'])
+          || request.resource.data.keys().hasOnly(['role', 'joinedAt', 'inviteCodeUsed'])
+        )
+        && (
+          request.resource.data.role == 'owner'
+          || (
+            request.resource.data.inviteCodeUsed is string
+            && exists(/databases/$(database)/documents/inviteCodes/$(request.resource.data.inviteCodeUsed))
+            && get(/databases/$(database)/documents/inviteCodes/$(request.resource.data.inviteCodeUsed)).data.calendarId == calendarId
+          )
+        );
+    }
+
+    function validUserMembership(calendarId) {
+      return request.resource.data.keys().hasOnly([
+          'role',
+          'joinedAt',
+          'name',
+          'inviteCode'
+        ])
+        && request.resource.data.role in ['owner', 'editor', 'viewer']
+        && validIsoDateString(request.resource.data.joinedAt)
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 80
+        && request.resource.data.inviteCode is string
+        && request.resource.data.inviteCode.size() >= 8
+        && request.resource.data.inviteCode.size() <= 40
+        && request.resource.data.inviteCode.matches('^[A-Z0-9]+$')
+        && exists(memberPath(calendarId, request.auth.uid))
+        && get(memberPath(calendarId, request.auth.uid)).data.role == request.resource.data.role;
+    }
+
+    match /users/{userId}/events/{eventId} {
+      allow read, delete: if isOwnerUser(userId);
+      allow create, update: if isOwnerUser(userId) && validEvent(eventId);
+    }
+
+    match /users/{userId}/calendarMemberships/{calendarId} {
+      allow read: if isOwnerUser(userId);
+      allow create, update: if isOwnerUser(userId) && validUserMembership(calendarId);
+      allow delete: if isOwnerUser(userId);
+    }
+
+    match /inviteCodes/{inviteCode} {
+      allow get: if signedIn()
+        && inviteCode.size() >= 8
+        && inviteCode.size() <= 40
+        && inviteCode.matches('^[A-Z0-9]+$');
+
+      allow create: if signedIn()
+        && inviteCode.size() >= 8
+        && inviteCode.size() <= 40
+        && inviteCode.matches('^[A-Z0-9]+$')
+        && request.resource.data.keys().hasOnly(['calendarId', 'createdAt'])
+        && request.resource.data.calendarId is string
+        && exists(/databases/$(database)/documents/sharedCalendars/$(request.resource.data.calendarId))
+        && get(/databases/$(database)/documents/sharedCalendars/$(request.resource.data.calendarId)).data.ownerUid == request.auth.uid
+        && validIsoDateString(request.resource.data.createdAt);
+    }
+
+    match /sharedCalendars/{calendarId} {
+      allow read: if isCalendarMember(calendarId);
+      allow create: if validCalendarCreate();
+      allow update: if canEditCalendar(calendarId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'updatedAt'])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 80
+        && validIsoDateString(request.resource.data.updatedAt);
+      allow delete: if isCalendarMember(calendarId) && currentMemberRole(calendarId) == 'owner';
+
+      match /members/{userId} {
+        allow read: if isCalendarMember(calendarId);
+        allow create: if isOwnerUser(userId)
+          && validMembership(calendarId, userId)
+          && (
+            (
+              request.resource.data.role == 'owner'
+              && get(/databases/$(database)/documents/sharedCalendars/$(calendarId)).data.ownerUid == request.auth.uid
+            )
+            || (
+              request.resource.data.role == 'editor'
+              && request.resource.data.inviteCodeUsed is string
+              && get(/databases/$(database)/documents/inviteCodes/$(request.resource.data.inviteCodeUsed)).data.calendarId == calendarId
+            )
+          );
+        allow update: if (
+            isCalendarMember(calendarId)
+            && currentMemberRole(calendarId) == 'owner'
+          )
+          || (
+            isOwnerUser(userId)
+            && resource.data.role == 'editor'
+            && validMembership(calendarId, userId)
+            && request.resource.data.role == 'editor'
+            && request.resource.data.inviteCodeUsed is string
+            && get(/databases/$(database)/documents/inviteCodes/$(request.resource.data.inviteCodeUsed)).data.calendarId == calendarId
+          );
+        allow delete: if isCalendarMember(calendarId) && currentMemberRole(calendarId) == 'owner';
+      }
+
+      match /events/{eventId} {
+        allow read: if isCalendarMember(calendarId);
+        allow create, update: if canEditCalendar(calendarId) && validEvent(eventId);
+        allow delete: if canEditCalendar(calendarId);
+      }
     }
   }
 }
