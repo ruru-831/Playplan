@@ -189,6 +189,11 @@ service cloud.firestore {
           && validUserMembership(calendarId)
         )
         || (
+          isOwnerUser(userId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['themeColor'])
+          && validColor(request.resource.data.themeColor)
+        )
+        || (
           isSharedCalendarOwner(calendarId)
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name'])
           && request.resource.data.name is string
@@ -247,6 +252,12 @@ service cloud.firestore {
             )
           );
         allow update: if (
+            isOwnerUser(userId)
+            && isCalendarMember(calendarId)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['themeColor'])
+            && validColor(request.resource.data.themeColor)
+          )
+          || (
             isCalendarMember(calendarId)
             && currentMemberRole(calendarId) == 'owner'
           )

@@ -116,6 +116,7 @@ const els = {
   createSharedCalendarBtn: document.querySelector("#createSharedCalendarBtn"),
   renameSharedCalendarBtn: document.querySelector("#renameSharedCalendarBtn"),
   copyInviteLinkBtn: document.querySelector("#copyInviteLinkBtn"),
+  changeThemeColorBtn: document.querySelector("#changeThemeColorBtn"),
   deleteSharedCalendarBtn: document.querySelector("#deleteSharedCalendarBtn"),
   sharedCalendarDialog: document.querySelector("#sharedCalendarDialog"),
   sharedCalendarForm: document.querySelector("#sharedCalendarForm"),
@@ -125,6 +126,10 @@ const els = {
   joinColorDialog: document.querySelector("#joinColorDialog"),
   joinColorForm: document.querySelector("#joinColorForm"),
   joinCalendarColor: document.querySelector("#joinCalendarColor"),
+  themeColorDialog: document.querySelector("#themeColorDialog"),
+  themeColorForm: document.querySelector("#themeColorForm"),
+  themeColorInput: document.querySelector("#themeColorInput"),
+  cancelThemeColorBtn: document.querySelector("#cancelThemeColorBtn"),
   appMessageDialog: document.querySelector("#appMessageDialog"),
   appMessageForm: document.querySelector("#appMessageForm"),
   appMessageTitle: document.querySelector("#appMessageTitle"),
@@ -182,6 +187,9 @@ function bindEvents() {
   els.cancelSharedCalendarBtn.addEventListener("click", () => els.sharedCalendarDialog.close());
   els.sharedCalendarForm.addEventListener("submit", handleCreateSharedCalendar);
   els.copyInviteLinkBtn.addEventListener("click", handleCopyInviteLink);
+  els.changeThemeColorBtn.addEventListener("click", openThemeColorDialog);
+  els.cancelThemeColorBtn.addEventListener("click", () => els.themeColorDialog.close());
+  els.themeColorForm.addEventListener("submit", handleThemeColorSubmit);
   els.deleteSharedCalendarBtn.addEventListener("click", handleDeleteSharedCalendar);
   els.joinColorForm.addEventListener("submit", handleJoinColorSubmit);
   els.joinColorDialog.addEventListener("cancel", (event) => event.preventDefault());
@@ -1078,6 +1086,7 @@ function renderCalendarMenu() {
 
   els.renameSharedCalendarBtn.classList.toggle("hidden", !(isSharedCalendar() && state.activeMemberRole === "owner"));
   els.copyInviteLinkBtn.classList.toggle("hidden", !isSharedCalendar());
+  els.changeThemeColorBtn.classList.toggle("hidden", !isSharedCalendar());
   els.deleteSharedCalendarBtn.classList.toggle("hidden", !(isSharedCalendar() && state.activeMemberRole === "owner"));
 }
 
@@ -1191,6 +1200,52 @@ async function handleRenameSharedCalendar() {
     appAlert("\u30ab\u30ec\u30f3\u30c0\u30fc\u540d\u306e\u66f4\u65b0\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002");
   }
 }
+
+function openThemeColorDialog() {
+  if (!isSharedCalendar()) return;
+  els.themeColorInput.value = normalizeThemeColor(state.activeMemberColor);
+  els.themeColorDialog.showModal();
+}
+
+async function handleThemeColorSubmit(event) {
+  event.preventDefault();
+  if (!isSharedCalendar() || !state.user || !state.db) return;
+
+  const themeColor = normalizeThemeColor(els.themeColorInput.value);
+  const calendarId = state.activeCalendar.id;
+
+  try {
+    await Promise.all([
+      updateDoc(doc(state.db, "sharedCalendars", calendarId, "members", state.user.uid), { themeColor }),
+      updateDoc(doc(state.db, "users", state.user.uid, "calendarMemberships", calendarId), { themeColor })
+    ]);
+
+    const eventsSnapshot = await getDocs(collection(state.db, "sharedCalendars", calendarId, "events"));
+    const updates = eventsSnapshot.docs
+      .map((eventDoc) => ({ id: eventDoc.id, data: eventDoc.data() }))
+      .filter(({ data }) => data.created_by === state.user.uid && data.event_type === "other")
+      .map(({ id }) => updateDoc(doc(state.db, "sharedCalendars", calendarId, "events", id), { creator_color: themeColor }));
+    await Promise.all(updates);
+
+    state.activeMemberColor = themeColor;
+    state.sharedCalendars = state.sharedCalendars.map((calendar) =>
+      calendar.id === calendarId ? { ...calendar, themeColor } : calendar
+    );
+    state.remoteEvents = state.remoteEvents.map((eventItem) =>
+      eventItem.created_by === state.user.uid && eventItem.event_type === "other"
+        ? { ...eventItem, creator_color: themeColor }
+        : eventItem
+    );
+    reconcileVisibleEvents();
+    els.themeColorDialog.close();
+    render();
+    appAlert("\u30c6\u30fc\u30de\u30ab\u30e9\u30fc\u3092\u66f4\u65b0\u3057\u307e\u3057\u305f\u3002");
+  } catch (error) {
+    console.error(error);
+    appAlert("\u30c6\u30fc\u30de\u30ab\u30e9\u30fc\u306e\u66f4\u65b0\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002");
+  }
+}
+
 async function handleDeleteSharedCalendar() {
   if (!isSharedCalendar() || state.activeMemberRole !== "owner" || !state.user || !state.db) return;
 

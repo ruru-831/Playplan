@@ -30,6 +30,7 @@
         <button id="createSharedCalendarBtn" class="button primary" type="button">共有カレンダーを作成</button>
         <button id="renameSharedCalendarBtn" class="button subtle hidden" type="button">カレンダー名を変更</button>
         <button id="copyInviteLinkBtn" class="button subtle hidden" type="button">共有リンクをコピー</button>
+        <button id="changeThemeColorBtn" class="button subtle hidden" type="button">テーマカラーを変更</button>
         <button id="deleteSharedCalendarBtn" class="button danger hidden" type="button">カレンダーを削除</button>
       </nav>
 
@@ -217,6 +218,22 @@
       </form>
     </dialog>
 
+    <dialog id="themeColorDialog" class="dialog">
+      <form id="themeColorForm" method="dialog">
+        <div class="dialog-header simple">
+          <h2>テーマカラーを変更</h2>
+        </div>
+        <label>
+          自分のテーマカラー
+          <input id="themeColorInput" type="color" value="#5B7C99" />
+        </label>
+        <div class="dialog-actions">
+          <button type="button" id="cancelThemeColorBtn" class="button subtle">キャンセル</button>
+          <button type="submit" class="button primary">保存</button>
+        </div>
+      </form>
+    </dialog>
+
     <dialog id="appMessageDialog" class="dialog app-message-dialog">
       <form id="appMessageForm" method="dialog">
         <div class="dialog-header simple">
@@ -236,6 +253,6 @@
 
     <div id="toastRoot" class="toast-root" aria-live="polite"></div>
 
-    <script type="module" src="./app.js?v=20260616-invite2"></script>
+    <script type="module" src="./app.js?v=20260616-theme-color"></script>
   </body>
 </html>
