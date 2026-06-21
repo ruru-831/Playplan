@@ -345,11 +345,26 @@ function getCurrentMemberColor() {
 
 function updateEventTypeLabels() {
   const gameLabel = isSharedCalendar() ? "\u3010\u5171\u901a\u3011\u30b2\u30fc\u30e0\u4e88\u5b9a" : "\u30b2\u30fc\u30e0\u4e88\u5b9a";
+  const commonLabel = isSharedCalendar() ? "\u3010\u5171\u901a\u3011\u4e88\u5b9a" : "\u4e88\u5b9a";
   const otherLabel = isSharedCalendar() ? "\u500b\u4eba\u306e\u4e88\u5b9a" : "\u305d\u308c\u4ee5\u5916\u306e\u4e88\u5b9a";
   const gameOption = els.eventType.querySelector('option[value="game"]');
+  const commonOption = els.eventType.querySelector('option[value="common"]');
   const otherOption = els.eventType.querySelector('option[value="other"]');
   if (gameOption) gameOption.textContent = gameLabel;
+  if (commonOption) {
+    commonOption.textContent = commonLabel;
+    commonOption.hidden = !isSharedCalendar();
+    commonOption.disabled = !isSharedCalendar();
+  }
   if (otherOption) otherOption.textContent = otherLabel;
+  if (!isSharedCalendar() && els.eventType.value === "common") {
+    els.eventType.value = "game";
+  }
+}
+
+function normalizeEventTypeValue(value) {
+  if (value === "other" || value === "common") return value;
+  return "game";
 }
 
 function getEventTypeClass(eventItem) {
@@ -641,7 +656,7 @@ function normalizeEvent(raw) {
     updated_at: updatedAt
   };
 
-  if (raw.event_type === "game" || raw.event_type === "other") {
+  if (raw.event_type === "game" || raw.event_type === "other" || raw.event_type === "common") {
     eventItem.event_type = raw.event_type;
   }
   if (typeof raw.created_by === "string" && raw.created_by.trim()) {
@@ -1334,7 +1349,7 @@ function buildSharedEventCopy(sourceEvent, calendar) {
     creator_color: normalizeThemeColor(calendar?.themeColor)
   };
 
-  if (sourceEvent.event_type === "game" || sourceEvent.event_type === "other") {
+  if (sourceEvent.event_type === "game" || sourceEvent.event_type === "other" || sourceEvent.event_type === "common") {
     copiedEvent.event_type = sourceEvent.event_type;
   }
 
@@ -1552,7 +1567,7 @@ async function handleSaveEvent(event) {
     end_time: els.endTime.value || null,
     friend_name: els.friendName.value.trim(),
     memo: els.memo.value.trim(),
-    event_type: els.eventType.value === "other" ? "other" : "game",
+    event_type: isSharedCalendar() ? normalizeEventTypeValue(els.eventType.value) : els.eventType.value === "other" ? "other" : "game",
     reminder_minutes: sanitizeReminder(els.reminderMinutes.value),
     created_at: previousEvent?.created_at || now,
     updated_at: now
@@ -2047,7 +2062,7 @@ function openEventDialog(dateKey, item = null) {
   els.dialogTitle.textContent = item ? "\u4e88\u5b9a\u3092\u7de8\u96c6" : "\u4e88\u5b9a\u3092\u8ffd\u52a0";
   els.eventId.value = item?.id || "";
   els.eventDate.value = item?.event_date || dateKey;
-  els.eventType.value = item?.event_type === "other" ? "other" : "game";
+  els.eventType.value = normalizeEventTypeValue(item?.event_type);
   els.startTime.value = normalizeTime(item?.start_time) || "";
   els.endTime.value = normalizeTime(item?.end_time) || "";
   els.friendName.value = item?.friend_name || "";

@@ -58,7 +58,7 @@ service cloud.firestore {
           !request.resource.data.keys().hasAny(['event_type'])
           || (
             request.resource.data.event_type is string
-            && request.resource.data.event_type in ['game', 'other']
+            && request.resource.data.event_type in ['game', 'other', 'common']
           )
         )
         && validTime(request.resource.data.start_time)
