@@ -438,6 +438,12 @@ h2 {
   color: #fff;
 }
 
+.week-event.event-common {
+  border-color: #b7d9c0;
+  background: #dff0e4;
+  color: #12351f;
+}
+
 .week-event strong,
 .week-event span {
   display: block;
@@ -540,6 +546,12 @@ h2 {
   border-color: #496b88;
   background: #5b7c99;
   color: #fff;
+}
+
+.event-chip.event-common {
+  border-color: #b7d9c0;
+  background: #dff0e4;
+  color: #12351f;
 }
 
 .side-panel {
@@ -759,6 +771,15 @@ h2 {
 
 .event-item.event-other .event-time {
   color: #5b7c99;
+}
+
+.event-item.event-common {
+  border-left: 5px solid #b7d9c0;
+  background: #f6fbf7;
+}
+
+.event-item.event-common .event-time {
+  color: #12351f;
 }
 
 .event-time {

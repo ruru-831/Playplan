@@ -373,6 +373,7 @@ function normalizeEventTypeValue(value) {
 }
 
 function getEventTypeClass(eventItem) {
+  if (eventItem?.event_type === "common") return "event-common";
   return eventItem?.event_type === "other" ? "event-other" : "event-game";
 }
 
