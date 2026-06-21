@@ -439,8 +439,8 @@ h2 {
 }
 
 .week-event.event-common {
-  border-color: #8cb873;
-  background: #a2cc89;
+  border-color: #c7d0c2;
+  background: #e6eae3;
   color: #12351f;
 }
 
@@ -549,8 +549,8 @@ h2 {
 }
 
 .event-chip.event-common {
-  border-color: #8cb873;
-  background: #a2cc89;
+  border-color: #c7d0c2;
+  background: #e6eae3;
   color: #12351f;
 }
 
@@ -774,8 +774,8 @@ h2 {
 }
 
 .event-item.event-common {
-  border-left: 5px solid #a2cc89;
-  background: #f3faef;
+  border-left: 5px solid #e6eae3;
+  background: #f8faf6;
 }
 
 .event-item.event-common .event-time {
