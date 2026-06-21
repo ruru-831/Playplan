@@ -344,22 +344,27 @@ function getCurrentMemberColor() {
 }
 
 function updateEventTypeLabels() {
-  const gameLabel = isSharedCalendar() ? "\u3010\u5171\u901a\u3011\u30b2\u30fc\u30e0\u4e88\u5b9a" : "\u30b2\u30fc\u30e0\u4e88\u5b9a";
-  const commonLabel = isSharedCalendar() ? "\u3010\u5171\u901a\u3011\u4e88\u5b9a" : "\u4e88\u5b9a";
-  const otherLabel = isSharedCalendar() ? "\u500b\u4eba\u306e\u4e88\u5b9a" : "\u305d\u308c\u4ee5\u5916\u306e\u4e88\u5b9a";
-  const gameOption = els.eventType.querySelector('option[value="game"]');
-  const commonOption = els.eventType.querySelector('option[value="common"]');
-  const otherOption = els.eventType.querySelector('option[value="other"]');
-  if (gameOption) gameOption.textContent = gameLabel;
-  if (commonOption) {
-    commonOption.textContent = commonLabel;
-    commonOption.hidden = !isSharedCalendar();
-    commonOption.disabled = !isSharedCalendar();
-  }
-  if (otherOption) otherOption.textContent = otherLabel;
-  if (!isSharedCalendar() && els.eventType.value === "common") {
-    els.eventType.value = "game";
-  }
+  const currentValue = els.eventType.value;
+  const options = isSharedCalendar()
+    ? [
+        ["game", "\u3010\u5171\u901a\u3011\u30b2\u30fc\u30e0\u4e88\u5b9a"],
+        ["common", "\u3010\u5171\u901a\u3011\u4e88\u5b9a"],
+        ["other", "\u500b\u4eba\u306e\u4e88\u5b9a"]
+      ]
+    : [
+        ["game", "\u30b2\u30fc\u30e0\u4e88\u5b9a"],
+        ["other", "\u305d\u308c\u4ee5\u5916\u306e\u4e88\u5b9a"]
+      ];
+
+  els.eventType.replaceChildren(
+    ...options.map(([value, label]) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      return option;
+    })
+  );
+  els.eventType.value = options.some(([value]) => value === currentValue) ? currentValue : "game";
 }
 
 function normalizeEventTypeValue(value) {
@@ -2058,6 +2063,7 @@ function openEventDialog(dateKey, item = null) {
     return;
   }
 
+  updateEventTypeLabels();
   state.shareSourceEvent = isPersonalCalendar() && item ? { ...item } : null;
   els.dialogTitle.textContent = item ? "\u4e88\u5b9a\u3092\u7de8\u96c6" : "\u4e88\u5b9a\u3092\u8ffd\u52a0";
   els.eventId.value = item?.id || "";
